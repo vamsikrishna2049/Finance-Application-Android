@@ -1,4 +1,4 @@
-name: Build Android APK (Capacitor)
+name: Build Android APK (Stable)
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    # 2️⃣ Setup Node.js (Required for Capacitor)
+    # 2️⃣ Setup Node (Required for Capacitor)
     - name: Setup Node
       uses: actions/setup-node@v4
       with:
@@ -24,55 +24,72 @@ jobs:
     - name: Install Dependencies
       run: npm ci
 
-    # 4️⃣ Build frontend (Vite/React)
+    # 4️⃣ Build frontend
     - name: Build Web App
       run: npm run build
 
-    # 5️⃣ Sync Capacitor Android
+    # 5️⃣ Sync Capacitor
     - name: Sync Capacitor
       run: npx cap sync android
 
-    # 6️⃣ Setup Java (Required for Gradle)
+    # 6️⃣ Setup Java
     - name: Setup Java
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '17'
 
-    # 7️⃣ Install Android SDK
+    # 7️⃣ Setup Android SDK
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
-    # 8️⃣ Accept licenses (important)
-    - name: Accept Android Licenses
+    # 8️⃣ Accept licenses
+    - name: Accept Licenses
       run: yes | sdkmanager --licenses
 
-    # 9️⃣ Fix gradlew permission (CRITICAL FIX)
+    # 9️⃣ Fix SDK path (IMPORTANT)
+    - name: Fix local.properties
+      run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+
+    # 🔟 Fix Gradle wrapper corruption (CRITICAL FIX)
+    - name: Recreate Gradle Wrapper
+      run: |
+        cd android
+        rm -rf gradle
+        rm -f gradlew
+        
+        curl -s https://services.gradle.org/distributions/gradle-8.7-bin.zip -o gradle.zip
+        unzip -q gradle.zip
+        mv gradle-8.7 gradle-temp
+        
+        gradle-temp/bin/gradle wrapper
+
+    # 1️⃣1️⃣ Fix permission
     - name: Fix Gradle Permission
       run: chmod +x android/gradlew
 
-    # 🔟 Cache Gradle (faster builds)
+    # 1️⃣2️⃣ Cache Gradle
     - name: Cache Gradle
       uses: actions/cache@v4
       with:
         path: |
           ~/.gradle/caches
           ~/.gradle/wrapper
-        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
         restore-keys: |
           ${{ runner.os }}-gradle
 
-    # 1️⃣1️⃣ Build APK
+    # 1️⃣3️⃣ Build APK
     - name: Build Debug APK
       run: |
         cd android
-        ./gradlew assembleDebug
+        ./gradlew assembleDebug --stacktrace
 
-    # 1️⃣2️⃣ Verify APK exists
+    # 1️⃣4️⃣ Verify output
     - name: Verify APK
       run: ls -R android/app/build/outputs/apk/
 
-    # 1️⃣3️⃣ Upload APK Artifact
+    # 1️⃣5️⃣ Upload APK
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
