@@ -5,7 +5,8 @@ const config: CapacitorConfig = {
   appName: 'Lumina',
   webDir: 'dist',
   server: {
-    androidScheme: 'https'
+    androidScheme: 'https',
+    hostname: 'localhost'
   }
 };
 

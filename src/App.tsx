@@ -9,13 +9,33 @@ import { motion, AnimatePresence } from 'motion/react';
 import { format, isWithinInterval, startOfMonth, endOfMonth, parseISO } from 'date-fns';
 import { GoogleGenAI, Type } from "@google/genai";
 import { cn } from './lib/utils';
+import { 
+  formatCurrency, 
+  filterAssets, 
+  filterTransactions, 
+  calculateTotalStats, 
+  calculateReportStats,
+  generateId,
+  generateCSV
+} from './lib/financeUtils';
 import { UserProfile, Transaction, Asset, AssetType } from './types';
 
 const STORAGE_KEY_USER = 'lumina_user';
 const STORAGE_KEY_TRANSACTIONS = 'lumina_transactions';
 const STORAGE_KEY_ASSETS = 'lumina_assets';
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+let aiInstance: GoogleGenAI | null = null;
+const getAI = () => {
+  if (!aiInstance) {
+    const key = process.env.GEMINI_API_KEY;
+    if (!key || key === 'MY_GEMINI_API_KEY') {
+      console.warn('Gemini API key is not configured. AI features will be disabled.');
+      return null;
+    }
+    aiInstance = new GoogleGenAI(key);
+  }
+  return aiInstance;
+};
 
 const DEFAULT_CATEGORIES = [
   // Income
@@ -120,13 +140,25 @@ export default function App() {
 
   const [searchQuery, setSearchQuery] = useState('');
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-      maximumFractionDigits: 0
-    }).format(amount);
-  };
+  // Filtered Assets
+  const filteredAssets = useMemo(() => {
+    return filterAssets(assets, searchQuery);
+  }, [assets, searchQuery]);
+
+  // Filtered Transactions for Reporting
+  const filteredTransactions = useMemo(() => {
+    return filterTransactions(transactions, dateRange, searchQuery);
+  }, [transactions, dateRange, searchQuery]);
+
+  // Dashboard Stats (Overall)
+  const totalStats = useMemo(() => {
+    return calculateTotalStats(transactions, assets, user);
+  }, [transactions, user, assets]);
+
+  // Report Stats (Filtered)
+  const reportStats = useMemo(() => {
+    return calculateReportStats(filteredTransactions);
+  }, [filteredTransactions]);
 
   const exportData = () => {
     const data = {
@@ -148,22 +180,7 @@ export default function App() {
   };
 
   const exportToCSV = () => {
-    const headers = ['Date', 'Title', 'Amount', 'Type', 'Category', 'Whom', 'Mode'];
-    const rows = filteredTransactions.map(t => [
-      t.date,
-      `"${t.title.replace(/"/g, '""')}"`,
-      t.amount,
-      t.type,
-      t.category,
-      t.whom,
-      t.mode
-    ]);
-
-    const csvContent = [
-      headers.join(','),
-      ...rows.map(r => r.join(','))
-    ].join('\n');
-
+    const csvContent = generateCSV(filteredTransactions);
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -178,78 +195,6 @@ export default function App() {
   const printToPDF = () => {
     window.print();
   };
-
-  // Filtered Assets
-  const filteredAssets = useMemo(() => {
-    if (!searchQuery) return assets;
-    const q = searchQuery.toLowerCase();
-    return assets.filter(a => 
-      a.name.toLowerCase().includes(q) || 
-      a.institution.toLowerCase().includes(q) || 
-      a.type.toLowerCase().includes(q)
-    );
-  }, [assets, searchQuery]);
-
-  // Filtered Transactions for Reporting
-  const filteredTransactions = useMemo(() => {
-    return transactions.filter(t => {
-      const tDate = parseISO(t.date);
-      const inDateRange = isWithinInterval(tDate, {
-        start: parseISO(dateRange.start),
-        end: parseISO(dateRange.end)
-      });
-      const matchesSearch = searchQuery === '' || 
-        t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        t.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        t.whom.toLowerCase().includes(searchQuery.toLowerCase());
-      
-      return inDateRange && matchesSearch;
-    });
-  }, [transactions, dateRange, searchQuery]);
-
-  // Dashboard Stats (Overall)
-  const totalStats = useMemo(() => {
-    const income = transactions
-      .filter(t => t.type === 'INCOME')
-      .reduce((sum, t) => sum + t.amount, 0);
-    
-    // Total expenses that are NOT investments (FD/RD/Investments)
-    const activeExpenses = transactions
-      .filter(t => t.type === 'EXPENSE' && !['Fixed Deposit (FD)', 'Recurring Deposit (RD)', 'Investment Account'].includes(t.category))
-      .reduce((sum, t) => sum + t.amount, 0);
-
-    // Total money moved to investments via transactions
-    const txInvestments = transactions
-      .filter(t => t.type === 'EXPENSE' && ['Fixed Deposit (FD)', 'Recurring Deposit (RD)', 'Investment Account'].includes(t.category))
-      .reduce((sum, t) => sum + t.amount, 0);
-
-    // Total current value of tracked assets
-    const assetValue = assets.reduce((sum, a) => sum + a.currentValue, 0);
-
-    const liquidBalance = (user?.initialBalance || 0) + income - activeExpenses - txInvestments;
-    const totalInvestments = txInvestments + assetValue;
-    const netWorth = liquidBalance + totalInvestments;
-
-    return { 
-      income, 
-      expenses: activeExpenses + txInvestments, 
-      liquidBalance, 
-      netWorth, 
-      investmentsTotal: totalInvestments 
-    };
-  }, [transactions, user, assets]);
-
-  // Report Stats (Filtered)
-  const reportStats = useMemo(() => {
-    const income = filteredTransactions
-      .filter(t => t.type === 'INCOME')
-      .reduce((sum, t) => sum + t.amount, 0);
-    const expenses = filteredTransactions
-      .filter(t => t.type === 'EXPENSE')
-      .reduce((sum, t) => sum + t.amount, 0);
-
-    return { income, expenses };
-  }, [filteredTransactions]);
 
   useEffect(() => {
     if (user) localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(user));
@@ -295,7 +240,7 @@ export default function App() {
   const addTransaction = (t: Omit<Transaction, 'id'>) => {
     const newTransaction: Transaction = {
       ...t,
-      id: crypto.randomUUID(),
+      id: generateId(),
     };
     setTransactions(prev => [newTransaction, ...prev]);
     setIsAddingTransaction(false);
@@ -307,7 +252,7 @@ export default function App() {
   const addAsset = (a: Omit<Asset, 'id' | 'lastUpdated'>) => {
     const newAsset: Asset = {
       ...a,
-      id: crypto.randomUUID(),
+      id: generateId(),
       lastUpdated: new Date().toISOString(),
     };
     setAssets(prev => [newAsset, ...prev]);
@@ -316,15 +261,12 @@ export default function App() {
 
   const extractTransactionData = async (text: string) => {
     try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Extract transaction details from this text: "${text}". 
-        Be strict with Whom, Mode, and Category.
-        Valid Whom: ${whomOptions.join(', ')}.
-        Valid Mode: ${modeOptions.join(', ')}.
-        Valid Categories: ${DEFAULT_CATEGORIES.map(c => c.name).join(', ')}.
-        Return ONLY valid JSON with keys: title, amount, type (INCOME/EXPENSE), category, date (YYYY-MM-DD), whom, mode.`,
-        config: {
+      const genAI = getAI();
+      if (!genAI) return null;
+      
+      const model = genAI.getGenerativeModel({ 
+        model: "gemini-1.5-flash",
+        generationConfig: {
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -341,7 +283,15 @@ export default function App() {
           }
         }
       });
-      return JSON.parse(response.text);
+
+      const result = await model.generateContent(`Extract transaction details from this text: "${text}". 
+        Be strict with Whom, Mode, and Category.
+        Valid Whom: ${whomOptions.join(', ')}.
+        Valid Mode: ${modeOptions.join(', ')}.
+        Valid Categories: ${DEFAULT_CATEGORIES.map(c => c.name).join(', ')}.
+        Return ONLY valid JSON with keys: title, amount, type (INCOME/EXPENSE), category, date (YYYY-MM-DD), whom, mode.`);
+      
+      return JSON.parse(result.response.text());
     } catch (err) {
       console.error("AI Extraction Error:", err);
       return null;
