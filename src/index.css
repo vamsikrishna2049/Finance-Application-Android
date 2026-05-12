@@ -1,38 +1,47 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  
-  --radius-2xl: 1rem;
-  --radius-3xl: 1.5rem;
-  --radius-4xl: 2rem;
-  
-  --color-brand-indigo-main: #4f46e5;
-  --color-brand-indigo-dark: #312e81;
-  --color-brand-emerald-main: #10b981;
-  --color-brand-rose-main: #fb7185;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-[#f8f9fa] text-slate-900 transition-colors duration-300;
+  }
+
+  /* Hide number input spinners */
+  input::-webkit-outer-spin-button,
+  input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  input[type=number] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+}
+
+.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+  @apply font-black tracking-tight mb-4 text-inherit;
+}
+
+.markdown-body p {
+  @apply text-sm leading-relaxed mb-4 text-slate-600;
+}
+
+.markdown-body ul {
+  @apply list-disc ml-4 mb-4 space-y-2;
+}
+
+.markdown-body li {
+  @apply text-sm text-slate-600;
 }
 
 @media print {
   .no-print {
     display: none !important;
-  }
-  .print-only {
-    display: block !important;
-  }
-  body {
-    background: white !important;
-    padding: 0 !important;
-  }
-}
-
-.print-only {
-  display: none;
-}
-
-@layer base {
-  body {
-    @apply bg-[#f8f9fa] text-[#1a1c1e] font-sans antialiased;
   }
 }

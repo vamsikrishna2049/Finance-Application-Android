@@ -1,4 +1,4 @@
-package com.lumina.finance;
+package com.finova.finance;
 
 import com.getcapacitor.BridgeActivity;
 

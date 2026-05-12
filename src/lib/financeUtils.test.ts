@@ -8,7 +8,7 @@ import {
   generateCSV,
   generateId
 } from './financeUtils';
-import { Transaction, Asset, UserProfile } from '../types';
+import { Transaction, Asset, UserProfile, FinanceSource } from '../types';
 
 describe('financeUtils', () => {
   const mockUser: UserProfile = {
@@ -26,7 +26,8 @@ describe('financeUtils', () => {
       category: 'Salary / Income',
       date: '2026-05-01',
       whom: 'Self',
-      mode: 'SBI UPI'
+      mode: 'SBI UPI',
+      source: 'SBI Bank'
     },
     {
       id: '2',
@@ -36,7 +37,8 @@ describe('financeUtils', () => {
       category: 'House Rent',
       date: '2026-05-05',
       whom: 'Self',
-      mode: 'Axis UPI'
+      mode: 'Axis UPI',
+      source: 'Axis Bank'
     },
     {
       id: '3',
@@ -46,7 +48,8 @@ describe('financeUtils', () => {
       category: 'Fixed Deposit (FD)',
       date: '2026-05-10',
       whom: 'Self',
-      mode: 'SBI UPI'
+      mode: 'SBI UPI',
+      source: 'SBI Bank'
     }
   ];
 
@@ -54,9 +57,8 @@ describe('financeUtils', () => {
     {
       id: 'a1',
       name: 'Google Stock',
-      institution: 'Zerodha',
       type: 'STOCK',
-      currentValue: 3000,
+      investedAmount: 2500,
       lastUpdated: '2026-05-01'
     }
   ];
@@ -98,22 +100,25 @@ describe('financeUtils', () => {
 
   describe('calculateTotalStats', () => {
     it('calculates total stats correctly', () => {
-      const stats = calculateTotalStats(mockTransactions, mockAssets, mockUser);
+      const mockSources: FinanceSource[] = [
+        { id: 's1', name: 'SBI Bank', type: 'BANK', initialBalance: 1000 }
+      ];
+      const stats = calculateTotalStats(mockTransactions, mockAssets, { ...mockUser, initialBalance: 0 }, mockSources);
       
       // Income: 5000
       // Active Expenses (Rent): 2000
       // Tx Investments (FD): 1000
-      // Asset Value: 3000
+      // Asset Value: 2500
       // User Initial: 1000
       
       // Liquid Balance = 1000 + 5000 - 2000 - 1000 = 3000
       expect(stats.liquidBalance).toBe(3000);
       
-      // Total Investments = 1000 (FD) + 3000 (Asset) = 4000
-      expect(stats.investmentsTotal).toBe(4000);
+      // Total Investments = 1000 (FD) + 2500 (Asset) = 3500
+      expect(stats.investmentsTotal).toBe(3500);
       
-      // Net Worth = 3000 (Liquid) + 4000 (Investments) = 7000
-      expect(stats.netWorth).toBe(7000);
+      // Net Worth = 3000 (Liquid) + 3500 (Investments) = 6500
+      expect(stats.netWorth).toBe(6500);
     });
   });
 

@@ -1,8 +1,8 @@
 import { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.lumina.finance',
-  appName: 'Lumina',
+  appId: 'com.finova.finance',
+  appName: 'Finova',
   webDir: 'dist',
   server: {
     androidScheme: 'https',
