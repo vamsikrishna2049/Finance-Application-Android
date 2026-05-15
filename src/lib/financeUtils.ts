@@ -1,4 +1,5 @@
 import { format, isWithinInterval, parseISO, startOfDay, addMonths, differenceInDays } from 'date-fns';
+import * as XLSX from 'xlsx';
 import { Transaction, Asset, UserProfile, FinanceSource } from '../types';
 import { FLAT_CATEGORIES } from '../categories';
 
@@ -56,6 +57,10 @@ export const calculateTotalStats = (transactions: Transaction[], assets: Asset[]
   const totalAssetsLiquid = sourceBalances
     .filter(s => s.currentBalance > 0)
     .reduce((sum, s) => sum + s.currentBalance, 0);
+
+  const cashOnHand = sourceBalances
+    .filter(s => (s.type === 'BANK' || s.type === 'WALLET') && s.currentBalance > 0)
+    .reduce((sum, s) => sum + s.currentBalance, 0);
     
   const totalLiabilities = sourceBalances
     .filter(s => s.currentBalance < 0)
@@ -74,13 +79,21 @@ export const calculateTotalStats = (transactions: Transaction[], assets: Asset[]
     liquidBalance, 
     totalLiabilities,
     totalAssetsLiquid,
+    cashOnHand,
     netWorth, 
     investmentsTotal: assetValue,
     monthlyInvestments: txInvestments,
+    taxEstimated: estimateTax(income * 12), // Annualized tax estimate
     dtiRatio: income > 0 ? (totalLiabilities / income) * 100 : 0,
     budgetRules: {
-      needs: income > 0 ? (transactions.filter(t => t.type === 'EXPENSE' && ['Rent', 'Bills', 'Groceries', 'Transport', 'Utilities', 'EMI'].includes(t.category)).reduce((sum, t) => sum + t.amount, 0) / income) * 100 : 0,
-      wants: income > 0 ? (transactions.filter(t => t.type === 'EXPENSE' && ['Entertainment', 'Shopping', 'Dining', 'Travel'].includes(t.category)).reduce((sum, t) => sum + t.amount, 0) / income) * 100 : 0,
+      needs: income > 0 ? (transactions.filter(t => {
+        const catInfo = FLAT_CATEGORIES.find(c => c.name === t.category);
+        return (t.type === 'EMI') || (t.type === 'EXPENSE' && (catInfo?.mainCategory === 'Essential Expenses' || catInfo?.mainCategory === 'Health & Security'));
+      }).reduce((sum, t) => sum + t.amount, 0) / income) * 100 : 0,
+      wants: income > 0 ? (transactions.filter(t => {
+        const catInfo = FLAT_CATEGORIES.find(c => c.name === t.category);
+        return (t.type === 'EXPENSE' && (catInfo?.mainCategory === 'Lifestyle & Travel' || catInfo?.mainCategory === 'Others' || !catInfo));
+      }).reduce((sum, t) => sum + t.amount, 0) / income) * 100 : 0,
       savings: income > 0 ? (txInvestments / income) * 100 : 0
     },
     portfolioPerformance: assets.reduce((acc, a) => {
@@ -128,6 +141,22 @@ export const checkFDMaturities = (sources: FinanceSource[]) => {
       isExpiringSoon: daysLeft >= 0 && daysLeft <= 30
     };
   }).filter(fd => fd.isExpiringSoon);
+};
+
+export const checkInsuranceRenewals = (assets: Asset[]) => {
+  const insurances = assets.filter(a => a.type === 'INSURANCE' && a.renewalDate);
+  const now = new Date();
+  
+  return insurances.map(ins => {
+    const renewal = parseISO(ins.renewalDate!);
+    const daysLeft = differenceInDays(renewal, now);
+    
+    return {
+      ...ins,
+      daysLeft,
+      isExpiringSoon: daysLeft >= 0 && daysLeft <= 30
+    };
+  }).filter(ins => ins.isExpiringSoon);
 };
 
 export const getTopBeneficiaries = (transactions: Transaction[]) => {
@@ -191,41 +220,56 @@ export const getCategorySpending = (transactions: Transaction[]) => {
     .sort((a, b) => b.amount - a.amount);
 };
 
-export const generateCSV = (transactions: Transaction[], assets: Asset[] = []) => {
-  const sections: string[] = [];
+export const generateExcelBlob = (transactions: Transaction[], assets: Asset[], sources: FinanceSource[]): Blob => {
+  const wb = XLSX.utils.book_new();
 
-  // Transaction Section
-  sections.push('--- TRANSACTIONS ---');
-  sections.push(['Date', 'Title', 'Amount', 'Type', 'Category', 'Whom', 'Mode'].join(','));
-  transactions.forEach(t => {
-    sections.push([
-      t.date,
-      `"${t.title.replace(/"/g, '""')}"`,
-      t.amount,
-      t.type,
-      t.category,
-      t.whom,
-      t.mode
-    ].join(','));
-  });
+  // 1. Transactions Sheet
+  const txData = (transactions || []).map(t => ({
+    Date: t.date || '',
+    Title: t.title || '',
+    Amount: t.amount || 0,
+    Type: t.type || '',
+    Category: t.category || '',
+    Whom: t.whom || '',
+    Mode: t.mode || '',
+    Source: t.source || '',
+    Details: t.details || ''
+  }));
+  const txSheet = XLSX.utils.json_to_sheet(txData);
+  XLSX.utils.book_append_sheet(wb, txSheet, 'Transactions');
 
-  if (assets.length > 0) {
-    sections.push('');
-    sections.push('--- ASSETS & INVESTMENTS ---');
-    sections.push(['Asset Name', 'Type', 'Invested Amount', 'Current Value', 'Last Updated', 'Details'].join(','));
-    assets.forEach(a => {
-      sections.push([
-        `"${a.name.replace(/"/g, '""')}"`,
-        a.type,
-        a.investedAmount,
-        a.currentValue ?? a.investedAmount,
-        a.lastUpdated,
-        `"${(a.details || '').replace(/"/g, '""')}"`
-      ].join(','));
-    });
+  // 2. Assets & Investments Sheet
+  if (assets && assets.length > 0) {
+    const assetData = assets.map(a => ({
+      Name: a.name || '',
+      Type: a.type || '',
+      'Invested Amount': a.investedAmount || 0,
+      'Current Value': a.currentValue || a.investedAmount || 0,
+      'Last Updated': a.lastUpdated || '',
+      Source: a.source || '',
+      Details: a.details || ''
+    }));
+    const assetSheet = XLSX.utils.json_to_sheet(assetData);
+    XLSX.utils.book_append_sheet(wb, assetSheet, 'Investments');
   }
 
-  return sections.join('\n');
+  // 3. Accounts & Sources Sheet
+  if (sources && sources.length > 0) {
+    const sourceBalances = calculateSourceBalances(transactions || [], sources);
+    const sourceData = sourceBalances.map(s => ({
+      Name: s.name || '',
+      Type: s.type || '',
+      'Initial Balance': s.initialBalance || 0,
+      'Current Balance': s.currentBalance || 0,
+      'Outstanding (if CC)': s.outstandingAmount || 0,
+      'Maturity (if FD)': s.maturityDate || ''
+    }));
+    const sourceSheet = XLSX.utils.json_to_sheet(sourceData);
+    XLSX.utils.book_append_sheet(wb, sourceSheet, 'Accounts');
+  }
+
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 };
 
 export const estimateTax = (annualIncome: number) => {
@@ -265,6 +309,42 @@ export const generateId = () => {
   return typeof crypto.randomUUID === 'function' 
     ? crypto.randomUUID() 
     : Math.random().toString(36).substring(2) + Date.now().toString(36);
+};
+
+export const getLastWorkingDayOfMonth = (year: number, month: number, holidays: string[] = []) => {
+  const lastDay = new Date(year, month + 1, 0);
+  let result = lastDay;
+
+  // Move back until it's a weekday and not a holiday
+  while (true) {
+    const day = result.getDay();
+    const dateStr = format(result, 'yyyy-MM-dd');
+    const isWeekend = day === 0 || day === 6;
+    const isHoliday = holidays.includes(dateStr);
+
+    if (!isWeekend && !isHoliday) {
+      break;
+    }
+    result.setDate(result.getDate() - 1);
+  }
+  
+  return format(result, 'yyyy-MM-dd');
+};
+
+export const getRecurringDateInMonth = (year: number, month: number, preferredDay: number) => {
+  // preferredDay is 1-31
+  // Create a date for the preferred day in that month
+  // month is 0-indexed (Jan=0)
+  const date = new Date(year, month, preferredDay);
+  
+  // If the object's month is the requested month, preferredDay exists
+  if (date.getMonth() === month) {
+    return format(date, 'yyyy-MM-dd');
+  }
+  
+  // If not (e.g. Feb 30), get the last day of the target month
+  const lastDay = new Date(year, month + 1, 0);
+  return format(lastDay, 'yyyy-MM-dd');
 };
 
 export const groupTransactionsByDate = (transactions: Transaction[]) => {
@@ -320,6 +400,62 @@ export const calculateHealthScore = (stats: any, transactions: Transaction[]) =>
   score += assetTypesCount; // Bonus for having a portfolio
 
   return Math.min(100, Math.max(0, Math.round(score)));
+};
+
+export const getNetWorthProjection = (currentNetWorth: number, monthlyIncome: number, monthlySavings: number, years: number = 10) => {
+  const annualGrowthRate = 0.08; // Average 8% conservative growth
+  const monthlyRate = annualGrowthRate / 12;
+  const data = [];
+  
+  let balance = currentNetWorth;
+  
+  for (let month = 0; month <= years * 12; month++) {
+    if (month % 12 === 0 || month === years * 12) {
+      data.push({
+        year: month / 12,
+        netWorth: Math.round(balance),
+        label: `${month / 12}y`
+      });
+    }
+    balance = balance * (1 + monthlyRate) + monthlySavings;
+  }
+  
+  return data;
+};
+
+export const simulateDebtPayoff = (debtName: string, principal: number, emi: number, extraPayment: number = 2000) => {
+  const annualRate = 0.12; // Assuming average interest rate 12% for simulation if not provided
+  const monthlyRate = annualRate / 12;
+  
+  const calculateMonths = (p: number, e: number) => {
+    let balance = p;
+    let months = 0;
+    while (balance > 0 && months < 600) { // Safety break at 50 years
+      const interest = balance * monthlyRate;
+      if (interest >= e && e > 0) balance = balance + interest - e;
+      else if (e > 0) balance = balance + interest - e;
+      else return Infinity;
+      
+      if (balance <= 0) return months + 1;
+      months++;
+      if (months >= 600) return Infinity;
+    }
+    return months;
+  };
+
+  const standardMonths = calculateMonths(principal, emi);
+  const acceleratedMonths = calculateMonths(principal, emi + extraPayment);
+  
+  const monthsSaved = (standardMonths !== Infinity && acceleratedMonths !== Infinity) ? standardMonths - acceleratedMonths : 0;
+  const interestSaved = monthsSaved > 0 ? monthsSaved * emi : 0; // Rough interest saving estimate
+
+  return {
+    debtName,
+    standardMonths,
+    acceleratedMonths,
+    monthsSaved,
+    interestSaved
+  };
 };
 
 export const getUpcomingRecurring = (transactions: Transaction[]) => {

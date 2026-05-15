@@ -4,10 +4,9 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Download, Sparkles, TrendingUp, Wallet, ArrowUpRight, ArrowDownRight, History, PieChart as PieChartIcon, X, Calendar as CalendarIcon, Filter, User as UserIcon, CreditCard, Briefcase, PlusCircle, FileText, BookOpen, AlertCircle, Search, Target, ChevronRight, ArrowUp, ArrowDown, Users, BrainCircuit, RefreshCw, MessageSquareQuote, Calculator, Scale } from 'lucide-react';
+import { Plus, Download, Zap, TrendingUp, TrendingDown, Wallet, ArrowUpRight, ArrowDownRight, History, PieChart as PieChartIcon, X, Calendar as CalendarIcon, Filter, User as UserIcon, CreditCard, Briefcase, PlusCircle, FileText, BookOpen, AlertCircle, Search, Target, ChevronRight, ArrowUp, ArrowDown, Users, RefreshCw, Calculator, Scale } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { format, isWithinInterval, startOfMonth, endOfMonth, parseISO, subQuarters, startOfQuarter, endOfQuarter, addMonths, differenceInDays } from 'date-fns';
-import Markdown from 'react-markdown';
+import { format, isWithinInterval, startOfMonth, endOfMonth, parseISO, subQuarters, startOfQuarter, endOfQuarter, addMonths, differenceInDays, differenceInMonths } from 'date-fns';
 import { cn } from './lib/utils';
 import { 
   ResponsiveContainer, 
@@ -23,6 +22,7 @@ import {
   AreaChart,
   Area
 } from 'recharts';
+import * as XLSX from 'xlsx';
 import { 
   formatCurrency, 
   filterAssets, 
@@ -30,20 +30,23 @@ import {
   calculateTotalStats, 
   calculateReportStats,
   generateId,
-  generateCSV,
+  generateExcelBlob,
   getCategorySpending,
   groupTransactionsByDate,
   calculateHealthScore,
   getUpcomingRecurring,
   getTopBeneficiaries,
   calculateSourceBalances,
-  checkFDMaturities
+  checkFDMaturities,
+  checkInsuranceRenewals,
+  getLastWorkingDayOfMonth,
+  getRecurringDateInMonth
 } from './lib/financeUtils';
-import { UserProfile, Transaction, Asset, AssetType, Budget, Goal, InsuranceType, FinanceSource } from './types';
+import { UserProfile, Transaction, TransactionType, Asset, AssetType, Budget, Goal, InsuranceType, FinanceSource } from './types';
 import { categories, FLAT_CATEGORIES as DEFAULT_CATEGORIES } from './categories';
-import { getFinancialAdvice, parseTransactionSms } from './services/geminiService';
 
 import { TransactionsPage } from './components/TransactionsPage';
+import { TaxEngine } from './components/TaxEngine';
 
 const STORAGE_KEY_USER = 'finova_user';
 const STORAGE_KEY_TRANSACTIONS = 'finova_transactions';
@@ -97,69 +100,221 @@ export default function App() {
     localStorage.setItem('finova_goals', JSON.stringify(goals));
   }, [goals]);
 
-  const generateAdvice = async () => {
-    setIsGeneratingAdvice(true);
-    try {
-      const advice = await getFinancialAdvice(transactions, assets, user, totalStats);
-      setAiAdvice(advice);
-      setShowAiPanel(true);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setIsGeneratingAdvice(false);
-    }
-  };
-
   const [isAddingTransaction, setIsAddingTransaction] = useState(false);
   const [isAddingGoal, setIsAddingGoal] = useState(false);
   const [activeGoalForContribution, setActiveGoalForContribution] = useState<Goal | null>(null);
   const [contributionAmount, setContributionAmount] = useState('');
   const [isRecurringChecked, setIsRecurringChecked] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
+  const [selectedAssetSource, setSelectedAssetSource] = useState('');
+  const [selectedInsuranceCompany, setSelectedInsuranceCompany] = useState('');
+  const [customInsuranceCompany, setCustomInsuranceCompany] = useState('');
+  const [assetStartDate, setAssetStartDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [assetEndDate, setAssetEndDate] = useState('');
+  const [assetTenureMonths, setAssetTenureMonths] = useState('');
+  const [assetROI, setAssetROI] = useState('');
+  const [formMaturityAmount, setFormMaturityAmount] = useState('');
+
   const [isAddingAsset, setIsAddingAsset] = useState(false);
-  const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'ASSETS' | 'SETTINGS' | 'BUDGETS' | 'TRANSACTIONS'>('DASHBOARD');
+  const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
+  const [isToppingUpAsset, setIsToppingUpAsset] = useState<Asset | null>(null);
+  const [topupAmount, setTopupAmount] = useState('');
+  const [topupDate, setTopupDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'ASSETS' | 'SETTINGS' | 'BUDGETS' | 'TRANSACTIONS' | 'TAX_PLANNING'>('DASHBOARD');
   const [selectedAssetType, setSelectedAssetType] = useState<AssetType>('MUTUAL_FUND');
   const [formUnitPrice, setFormUnitPrice] = useState<string>('');
   const [formQuantity, setFormQuantity] = useState<string>('');
   const [formInvestedAmount, setFormInvestedAmount] = useState<string>('');
-
-  useEffect(() => {
-    if (['STOCK', 'MUTUAL_FUND'].includes(selectedAssetType) && formUnitPrice && formQuantity) {
-      const total = parseFloat(formUnitPrice) * parseFloat(formQuantity);
-      setFormInvestedAmount(total.toFixed(2));
-    }
-  }, [formUnitPrice, formQuantity, selectedAssetType]);
-  const [aiAdvice, setAiAdvice] = useState<string | null>(null);
-  const [isGeneratingAdvice, setIsGeneratingAdvice] = useState(false);
-  const [showAiPanel, setShowAiPanel] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
-  const [isSmartAdding, setIsSmartAdding] = useState(false);
-  const [smartAddInput, setSmartAddInput] = useState('');
-  const [isParsingSmartAdd, setIsParsingSmartAdd] = useState(false);
-  const [smartAddResult, setSmartAddResult] = useState<any>(null);
 
   const [whomOptions, setWhomOptions] = useState<string[]>(() => {
     const saved = localStorage.getItem('finova_whom_options');
-    const options = saved ? JSON.parse(saved) : [];
+    const options = saved ? JSON.parse(saved) : ['Self', 'Family', 'Friends'];
     return options.filter((p: string) => p && p.trim() !== '');
   });
 
   const [modeOptions, setModeOptions] = useState<string[]>(() => {
     const saved = localStorage.getItem('finova_mode_options');
-    const options = saved ? JSON.parse(saved) : [];
+    const options = saved ? JSON.parse(saved) : ['Cash', 'GPay', 'PhonePe', 'Bank Transfer', 'Credit Card'];
     return options.filter((m: string) => m && m.trim() !== '');
   });
+
+  const [insuranceCompanyOptions, setInsuranceCompanyOptions] = useState<string[]>(() => {
+    const saved = localStorage.getItem('finova_insurance_options');
+    const options = saved ? JSON.parse(saved) : ['LIC', 'HDFC Ergo', 'ICICI Lombard', 'Star Health', 'Niva Bupa', 'Tata AIG', 'SBI General'];
+    return options.filter((c: string) => c && c.trim() !== '');
+  });
+
   const [onboardingData, setOnboardingData] = useState({ name: '', initialBalance: '' });
   const [onboardingStep, setOnboardingStep] = useState(1);
   const [onboardingSources, setOnboardingSources] = useState<Omit<FinanceSource, 'id'>[]>([]);
-  const [onboardingSourceType, setOnboardingSourceType] = useState<'BANK' | 'CREDIT_CARD' | 'WALLET' | 'OTHER' | 'FD'>('BANK');
-  const [settingsSourceType, setSettingsSourceType] = useState<'BANK' | 'CREDIT_CARD' | 'WALLET' | 'OTHER' | 'FD'>('BANK');
-  
-  // Date Range for Reporting
+  const [onboardingSourceType, setOnboardingSourceType] = useState<'BANK' | 'CREDIT_CARD' | 'WALLET' | 'OTHER' | 'FD' | 'RD'>('BANK');
+  const [onboardingAssetType, setOnboardingAssetType] = useState<AssetType>('VEHICLE');
+  const [settingsSourceType, setSettingsSourceType] = useState<'BANK' | 'CREDIT_CARD' | 'WALLET' | 'OTHER' | 'FD' | 'RD'>('BANK');
+  const [onboardingBudgets, setOnboardingBudgets] = useState<Budget[]>([]);
+  const [onboardingAssets, setOnboardingAssets] = useState<Omit<Asset, 'id' | 'lastUpdated'>[]>([]);
+
+  useEffect(() => {
+    if (isAddingAsset || editingAsset) {
+      setAssetStartDate(editingAsset?.startDate || format(new Date(), 'yyyy-MM-dd'));
+      setAssetEndDate(editingAsset?.endDate || '');
+      setAssetTenureMonths(editingAsset?.tenureMonths?.toString() || '');
+      setAssetROI(editingAsset?.roi?.toString() || '');
+      setFormMaturityAmount(editingAsset?.maturityAmount?.toString() || '');
+      setSelectedAssetSource(editingAsset?.source || (sources.length > 0 ? sources[0].name : ''));
+      setSelectedInsuranceCompany(editingAsset?.insuranceCompany || (insuranceCompanyOptions.length > 0 ? insuranceCompanyOptions[0] : ''));
+      setSelectedAssetType(editingAsset?.type || 'MUTUAL_FUND');
+      setFormInvestedAmount(editingAsset?.investedAmount?.toString() || '');
+      setFormUnitPrice(editingAsset?.unitPrice?.toString() || '');
+      setFormQuantity(editingAsset?.quantity?.toString() || '');
+    }
+  }, [isAddingAsset, editingAsset, sources, insuranceCompanyOptions]);
+
+  // Auto-calculate Maturity Date and Amount based on ROI
+  useEffect(() => {
+    if (assetStartDate && assetTenureMonths) {
+      const months = parseInt(assetTenureMonths);
+      if (months > 0) {
+        const end = addMonths(parseISO(assetStartDate), months);
+        setAssetEndDate(format(end, 'yyyy-MM-dd'));
+        
+        // Maturity amount calculation (Compound Interest assuming quarterly compounding for FD)
+        const principal = parseFloat(formInvestedAmount) || 0;
+        const roi = parseFloat(assetROI) || 0;
+        if (principal > 0 && roi > 0) {
+          if (selectedAssetType === 'FD') {
+            const timeYears = months / 12;
+            const compoundFrequency = 4; // Quarterly
+            const amount = principal * Math.pow((1 + (roi / 100) / compoundFrequency), compoundFrequency * timeYears);
+            setFormMaturityAmount(Math.round(amount).toString());
+          } else if (selectedAssetType === 'RD') {
+            // RD maturity calculation: P * [(1+i)^n - 1] / (1 - (1+i)^-1/3) etc... simplified formula:
+            const r = roi / 1200;
+            const n = months;
+            const amount = principal * ((Math.pow(1 + r, n) - 1) / r) * (1 + r);
+            setFormMaturityAmount(Math.round(amount).toString());
+          }
+        }
+      }
+    }
+  }, [assetStartDate, assetTenureMonths, assetROI, formInvestedAmount, selectedAssetType]);
+
+  const handleInvestedAmountChange = (val: string) => {
+    setFormInvestedAmount(val);
+    const amt = parseFloat(val) || 0;
+    if (amt > 0) {
+      const q = parseFloat(formQuantity) || 0;
+      const p = parseFloat(formUnitPrice) || 0;
+      if (q > 0) {
+        setFormUnitPrice((amt / q).toFixed(2));
+      } else if (p > 0) {
+        setFormQuantity((amt / p).toFixed(3));
+      }
+    }
+  };
+
+  const handleQuantityChange = (val: string) => {
+    setFormQuantity(val);
+    const q = parseFloat(val) || 0;
+    const amt = parseFloat(formInvestedAmount) || 0;
+    const p = parseFloat(formUnitPrice) || 0;
+    
+    if (q > 0 && amt > 0) {
+      setFormUnitPrice((amt / q).toFixed(2));
+    } else if (q > 0 && p > 0 && amt === 0) {
+      setFormInvestedAmount((q * p).toFixed(2));
+    }
+  };
+
+  const handleUnitPriceChange = (val: string) => {
+    setFormUnitPrice(val);
+    const p = parseFloat(val) || 0;
+    const amt = parseFloat(formInvestedAmount) || 0;
+    const q = parseFloat(formQuantity) || 0;
+
+    if (p > 0 && amt > 0) {
+      setFormQuantity((amt / p).toFixed(3));
+    } else if (p > 0 && q > 0 && amt === 0) {
+      setFormInvestedAmount((p * q).toFixed(2));
+    }
+  };
+
+  useEffect(() => {
+    if (['STOCK', 'MUTUAL_FUND', 'GOLD', 'SILVER', 'ULIPS'].includes(selectedAssetType)) {
+      // Logic handled in onChange for better user control
+    }
+  }, [selectedAssetType]);
+
   const [dateRange, setDateRange] = useState({
     start: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
     end: format(endOfMonth(new Date()), 'yyyy-MM-dd')
   });
+
+  // Sync RD transactions automatically
+  useEffect(() => {
+    const syncRDTransactions = () => {
+      const rdAssets = assets.filter(a => a.type === 'RD' && a.startDate);
+      if (rdAssets.length === 0) return;
+
+      const today = new Date();
+      let newTxs: Transaction[] = [];
+
+      rdAssets.forEach(asset => {
+        const start = parseISO(asset.startDate!);
+        const preferredDay = start.getDate();
+        
+        // Calculate number of installments due until now using year/month math
+        const totalMonthsDue = (today.getFullYear() * 12 + today.getMonth()) - (start.getFullYear() * 12 + start.getMonth()) + 1;
+        
+        for (let i = 0; i < totalMonthsDue; i++) {
+          const targetMonthDate = addMonths(start, i);
+          // If the installment is in the future, don't log it yet
+          if (targetMonthDate > today && i > 0) continue; 
+          
+          const txDate = getRecurringDateInMonth(targetMonthDate.getFullYear(), targetMonthDate.getMonth(), preferredDay);
+          
+          // Verify it's not in the future (for the edge case where targetMonthDate is today but txDate is tomorrow)
+          if (txDate > format(today, 'yyyy-MM-dd')) continue;
+
+          // Check if transaction already exists
+          // We look for any transaction for this asset on this date
+          const alreadyExists = transactions.some(t => 
+            t.date === txDate && 
+            t.title.includes(asset.name) && 
+            (t.type === 'INVESTMENT' || t.mode === 'Auto-Debit')
+          );
+
+          if (!alreadyExists) {
+            newTxs.push({
+              id: generateId(),
+              title: `RD Installment: ${asset.name}`,
+              amount: asset.investedAmount,
+              type: 'INVESTMENT',
+              category: 'Investments',
+              date: txDate,
+              whom: 'Self',
+              mode: 'Auto-Debit',
+              source: asset.source || (sources.length > 0 ? sources[0].name : 'Bank')
+            });
+          }
+        }
+      });
+
+      if (newTxs.length > 0) {
+        setTransactions(prev => [...newTxs, ...prev]);
+        // Update total invested amount of assets if it's supposed to be cumulative
+        // Actually, in this app, investedAmount seems to be the PER-MONTH for RD
+        // and we might need to update the Asset's 'investedAmount' to reflect cumulative?
+        // No, current logic in dashboard seems to use investedAmount as the fixed principal for FDs/RDs.
+        // But for RD, usually we track cumulative. 
+        // For now, I'll stick to logging transactions as requested.
+      }
+    };
+
+    // Run sync on mount and when assets/transactions change (with caution)
+    syncRDTransactions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assets]); // Run when assets change (including edits)
 
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -187,6 +342,20 @@ export default function App() {
     return getTopBeneficiaries(transactions);
   }, [transactions]);
 
+  const currentMonthCategorySpending = useMemo(() => {
+    const start = format(startOfMonth(new Date()), 'yyyy-MM-dd');
+    const end = format(endOfMonth(new Date()), 'yyyy-MM-dd');
+    
+    // Filter transactions for the current month that are expenses or EMIs
+    const currentMonthTxs = transactions.filter(t => t.date >= start && t.date <= end && (t.type === 'EXPENSE' || t.type === 'EMI'));
+    
+    const spending: Record<string, number> = {};
+    currentMonthTxs.forEach(t => {
+      spending[t.category] = (spending[t.category] || 0) + t.amount;
+    });
+    return spending;
+  }, [transactions]);
+
    const totalRequiredAmount = useMemo(() => {
     return Object.entries(budgets).reduce((sum, [category, amount]) => {
       let monthlyAmount = Number(amount);
@@ -197,9 +366,12 @@ export default function App() {
     }, 0);
   }, [budgets]);
 
-  const fdMaturityAlerts = useMemo(() => {
-    return checkFDMaturities(sources);
-  }, [sources]);
+  const fdMaturityAlerts = useMemo(() => checkFDMaturities(sources), [sources]);
+  const insuranceRenewalAlerts = useMemo(() => checkInsuranceRenewals(assets), [assets]);
+  const allAlerts = useMemo(() => [
+    ...fdMaturityAlerts.map(a => ({ ...a, alertType: 'FD_MATURITY' as const })),
+    ...insuranceRenewalAlerts.map(a => ({ ...a, alertType: 'INSURANCE_RENEWAL' as const }))
+  ].sort((a, b) => a.daysLeft - b.daysLeft), [fdMaturityAlerts, insuranceRenewalAlerts]);
 
   // Daily Stats for Chart (Aggregated into 7 buckets for the range)
   const dailyChartStats = useMemo(() => {
@@ -283,21 +455,20 @@ export default function App() {
     }
   };
 
-  const exportToCSV = () => {
+  const exportToExcel = () => {
     try {
-      const csvContent = generateCSV(filteredTransactions, assets);
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const blob = generateExcelBlob(filteredTransactions, assets, sources);
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `finova_transactions_${dateRange.start}_to_${dateRange.end}.csv`;
+      link.download = `finova_data_${format(new Date(), 'yyyy-MM-dd')}.xlsx`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
     } catch (err) {
-      console.error("CSV Export Error:", err);
-      alert("Failed to export CSV: " + (err instanceof Error ? err.message : String(err)));
+      console.error("Export Error:", err);
+      alert("Failed to export Excel data: " + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -305,23 +476,30 @@ export default function App() {
     try {
       const filtered = transactions.filter(t => t.date >= start && t.date <= end);
       
-      if (filtered.length === 0) {
+      if (filtered.length === 0 && assets.length === 0 && sources.length === 0) {
         alert(`No transactions found for ${label} (${format(parseISO(start), 'dd MMM')} - ${format(parseISO(end), 'dd MMM')})`);
         return;
       }
 
-      const csvContent = generateCSV(filtered, assets);
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
+      const blob = generateExcelBlob(filtered, assets, sources);
+      const fileName = `finova_report_${label.toLowerCase().replace(/\s+/g, '_')}.xlsx`;
+      
+      const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
+      link.style.display = 'none';
       link.href = url;
-      link.download = `finova_report_${label.toLowerCase().replace(/\s+/g, '_')}.csv`;
+      link.setAttribute('download', fileName);
+      
       document.body.appendChild(link);
       link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      
+      setTimeout(() => {
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+      }, 200);
     } catch (err) {
       console.error("Report Export Error:", err);
+      alert("Failed to export Excel report: " + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -390,11 +568,28 @@ export default function App() {
       setOnboardingStep(2);
       return;
     }
+    
+    if (onboardingStep === 2) {
+      setOnboardingStep(3);
+      return;
+    }
 
-    const newUser = {
+    if (onboardingStep === 3) {
+      setOnboardingStep(4);
+      return;
+    }
+
+    if (onboardingStep === 4) {
+      setOnboardingStep(5);
+      return;
+    }
+
+    const newUser: UserProfile = {
       name: onboardingData.name,
       initialBalance: 0, // We use sources now
-      onboarded: true
+      onboarded: true,
+      employmentType: (onboardingData as any).employmentType || 'SALARIED',
+      salaryBankName: (onboardingData as any).salaryBankName || ''
     };
     
     const formattedSources = onboardingSources.map(s => ({
@@ -402,7 +597,20 @@ export default function App() {
       id: generateId()
     }));
     
+    const formattedAssets = onboardingAssets.map(a => ({
+      ...a,
+      id: generateId(),
+      lastUpdated: new Date().toISOString()
+    }));
+
+    const budgetRecord: Record<string, number> = {};
+    onboardingBudgets.forEach(b => {
+      budgetRecord[b.category] = b.amount;
+    });
+
     setSources(formattedSources);
+    setAssets(formattedAssets);
+    setBudgets(budgetRecord);
     setUser(newUser);
   };
 
@@ -410,26 +618,56 @@ export default function App() {
   const [customMode, setCustomMode] = useState('');
   const [customWhom, setCustomWhom] = useState('');
   const [selectedCategory, setSelectedCategory] = useState(DEFAULT_CATEGORIES[0].name);
+  const [selectedType, setSelectedType] = useState<TransactionType>('EXPENSE');
   const [selectedMode, setSelectedMode] = useState('Add New...');
   const [selectedWhom, setSelectedWhom] = useState('Add New...');
 
   const [selectedSource, setSelectedSource] = useState('Add New...');
+  const [formTitle, setFormTitle] = useState('');
+  const [formDate, setFormDate] = useState(format(new Date(), 'yyyy-MM-dd'));
 
   useEffect(() => {
     if (isAddingTransaction) {
       setIsRecurringChecked(editingTransaction?.isRecurring || false);
       if (editingTransaction) {
+        setSelectedType(editingTransaction.type);
         setSelectedCategory(editingTransaction.category);
         setSelectedMode(editingTransaction.mode);
         setSelectedWhom(editingTransaction.whom || 'Add New...');
         setSelectedSource(editingTransaction.source || (sources.length > 0 ? sources[0].name : 'Add New...'));
+        setFormTitle(editingTransaction.title);
+        setFormDate(editingTransaction.date);
       } else {
+        setSelectedType('EXPENSE');
+        setSelectedCategory(DEFAULT_CATEGORIES[0].name);
         setSelectedMode(modeOptions.length > 0 ? modeOptions[0] : 'Add New...');
         setSelectedWhom(whomOptions.length > 0 ? whomOptions[0] : 'Add New...');
         setSelectedSource(sources.length > 0 ? sources[0].name : 'Add New...');
+        setFormTitle('');
+        setFormDate(format(new Date(), 'yyyy-MM-dd'));
       }
     }
   }, [isAddingTransaction, editingTransaction, modeOptions, whomOptions, sources]);
+
+  useEffect(() => {
+    if (selectedCategory === 'Salary') {
+      setFormTitle('Salary');
+      const now = new Date();
+      setFormDate(getLastWorkingDayOfMonth(now.getFullYear(), now.getMonth()));
+    }
+  }, [selectedCategory]);
+
+  const handleRecordSalary = () => {
+    const now = new Date();
+    const lwd = getLastWorkingDayOfMonth(now.getFullYear(), now.getMonth());
+    setFormTitle('Salary');
+    setFormDate(lwd);
+    setIsAddingTransaction(true);
+    setEditingTransaction(null);
+    setSelectedType('INCOME');
+    setSelectedCategory('Salary');
+    setSelectedWhom('Self');
+  };
 
   const addTransaction = (t: Omit<Transaction, 'id'>) => {
     const newTransaction: Transaction = {
@@ -437,16 +675,20 @@ export default function App() {
       id: generateId(),
     };
     
-    // Save new whom/mode options if they don't exist
-    if (t.whom && !whomOptions.includes(t.whom)) {
-      const updatedWhom = [...whomOptions, t.whom];
-      setWhomOptions(updatedWhom);
-      localStorage.setItem('finova_whom_options', JSON.stringify(updatedWhom));
+    // Save new whom/mode options if they don't exist and aren't "Add New..."
+    if (t.whom && t.whom !== 'Add New...' && !whomOptions.includes(t.whom)) {
+      setWhomOptions(prev => {
+        const updated = [...prev, t.whom];
+        localStorage.setItem('finova_whom_options', JSON.stringify(updated));
+        return updated;
+      });
     }
-    if (t.mode && !modeOptions.includes(t.mode)) {
-      const updatedMode = [...modeOptions, t.mode];
-      setModeOptions(updatedMode);
-      localStorage.setItem('finova_mode_options', JSON.stringify(updatedMode));
+    if (t.mode && t.mode !== 'Add New...' && !modeOptions.includes(t.mode)) {
+      setModeOptions(prev => {
+        const updated = [...prev, t.mode];
+        localStorage.setItem('finova_mode_options', JSON.stringify(updated));
+        return updated;
+      });
     }
 
     setTransactions(prev => [newTransaction, ...prev]);
@@ -455,19 +697,25 @@ export default function App() {
     setCustomCategory('');
     setCustomMode('');
     setCustomWhom('');
+    setSelectedWhom(whomOptions[0] || 'Self');
+    setSelectedMode(modeOptions[0] || 'Other');
   };
 
   const updateTransaction = (t: Transaction) => {
-    // Save new whom/mode options if they don't exist
-    if (t.whom && !whomOptions.includes(t.whom)) {
-      const updatedWhom = [...whomOptions, t.whom];
-      setWhomOptions(updatedWhom);
-      localStorage.setItem('finova_whom_options', JSON.stringify(updatedWhom));
+    // Save new whom/mode options if they don't exist and aren't "Add New..."
+    if (t.whom && t.whom !== 'Add New...' && !whomOptions.includes(t.whom)) {
+      setWhomOptions(prev => {
+        const updated = [...prev, t.whom];
+        localStorage.setItem('finova_whom_options', JSON.stringify(updated));
+        return updated;
+      });
     }
-    if (t.mode && !modeOptions.includes(t.mode)) {
-      const updatedMode = [...modeOptions, t.mode];
-      setModeOptions(updatedMode);
-      localStorage.setItem('finova_mode_options', JSON.stringify(updatedMode));
+    if (t.mode && t.mode !== 'Add New...' && !modeOptions.includes(t.mode)) {
+      setModeOptions(prev => {
+        const updated = [...prev, t.mode];
+        localStorage.setItem('finova_mode_options', JSON.stringify(updated));
+        return updated;
+      });
     }
 
     setTransactions(prev => prev.map(item => item.id === t.id ? t : item));
@@ -477,6 +725,8 @@ export default function App() {
     setCustomCategory('');
     setCustomMode('');
     setCustomWhom('');
+    setSelectedWhom(whomOptions[0] || 'Self');
+    setSelectedMode(modeOptions[0] || 'Other');
   };
 
   const addAsset = (a: Omit<Asset, 'id' | 'lastUpdated'>) => {
@@ -487,22 +737,102 @@ export default function App() {
       lastUpdated: new Date().toISOString(),
     };
     
+    // Save new insurance options
+    if (a.insuranceCompany && a.insuranceCompany !== 'Add New...' && !insuranceCompanyOptions.includes(a.insuranceCompany)) {
+      setInsuranceCompanyOptions(prev => {
+        const updated = [...prev, a.insuranceCompany!];
+        localStorage.setItem('finova_insurance_options', JSON.stringify(updated));
+        return updated;
+      });
+    }
+
     // Automatically create an investment transaction
-    const transaction: Transaction = {
-      id: generateId(),
-      title: `Investment: ${a.name}`,
-      amount: a.investedAmount,
-      type: 'INVESTMENT',
-      category: 'Investments',
-      date: format(new Date(), 'yyyy-MM-dd'),
-      whom: 'Self',
-      mode: 'Linked Account',
-      source: sources[0]?.name || 'Bank'
-    };
+    const transactionDate = (a.type === 'RD' || a.type === 'FD') && a.startDate ? a.startDate : format(new Date(), 'yyyy-MM-dd');
+    
+    // For RD, the sync useEffect will handle transaction generation if we skip it here,
+    // but adding the first one (or starting the sync) is good.
+    // If it's an RD, let the sync logic handle it to avoid duplicate logic.
+    if (a.type !== 'RD') {
+      const transaction: Transaction = {
+        id: generateId(),
+        title: `Investment: ${a.name}`,
+        amount: a.investedAmount,
+        type: 'INVESTMENT',
+        category: 'Investments',
+        date: transactionDate,
+        whom: 'Self',
+        mode: a.type === 'FD' ? 'Fixed Deposit' : 'Asset Purchase',
+        source: a.source || sources[0]?.name || 'Bank'
+      };
+      setTransactions(prev => [transaction, ...prev]);
+    }
 
     setAssets(prev => [newAsset, ...prev]);
-    setTransactions(prev => [transaction, ...prev]);
     setIsAddingAsset(false);
+  };
+
+  const updateAsset = (a: Asset) => {
+    // Save new insurance options
+    if (a.insuranceCompany && a.insuranceCompany !== 'Add New...' && !insuranceCompanyOptions.includes(a.insuranceCompany)) {
+      setInsuranceCompanyOptions(prev => {
+        const updated = [...prev, a.insuranceCompany!];
+        localStorage.setItem('finova_insurance_options', JSON.stringify(updated));
+        return updated;
+      });
+    }
+
+    setAssets(prev => prev.map(item => item.id === a.id ? { ...a, lastUpdated: new Date().toISOString() } : item));
+    setEditingAsset(null);
+    setIsAddingAsset(false);
+  };
+
+  const addTopUp = (assetId: string, amount: number, date: string) => {
+    const asset = assets.find(a => a.id === assetId);
+    if (!asset) return;
+
+    const topup = { amount, date };
+    const updatedTopups = [...(asset.topups || []), topup];
+    
+    // Recalculate maturity amount for FD/RD if ROI is known
+    let newMaturityAmount = asset.maturityAmount;
+    if ((asset.type === 'FD' || asset.type === 'RD') && asset.roi && asset.endDate) {
+      const maturityDate = parseISO(asset.endDate);
+      const topupDateObj = parseISO(date);
+      const monthsRemaining = differenceInMonths(maturityDate, topupDateObj);
+      
+      if (monthsRemaining > 0) {
+        const r = asset.roi / 1200;
+        const n = monthsRemaining;
+        const extraInterest = amount * (Math.pow(1 + r, n) - 1);
+        newMaturityAmount = (newMaturityAmount || 0) + amount + extraInterest;
+      }
+    }
+
+    const updatedAsset: Asset = {
+      ...asset,
+      investedAmount: asset.investedAmount + amount,
+      maturityAmount: newMaturityAmount,
+      topups: updatedTopups,
+      lastUpdated: new Date().toISOString()
+    };
+
+    // Add transaction for the top-up
+    const transaction: Transaction = {
+      id: generateId(),
+      title: `Top-up: ${asset.name}`,
+      amount: amount,
+      type: 'INVESTMENT',
+      category: 'Investments',
+      date: date,
+      whom: 'Self',
+      mode: 'Top-up',
+      source: asset.source || sources[0]?.name || 'Bank'
+    };
+
+    setAssets(prev => prev.map(item => item.id === assetId ? updatedAsset : item));
+    setTransactions(prev => [transaction, ...prev]);
+    setIsToppingUpAsset(null);
+    setTopupAmount('');
   };
 
   const addGoal = (g: Omit<Goal, 'id'>) => {
@@ -558,7 +888,7 @@ export default function App() {
                 <Wallet size={36} />
               </div>
               <div className="absolute -top-2 -right-2 w-8 h-8 bg-emerald-500 rounded-2xl border-4 border-white dark:border-slate-900 flex items-center justify-center text-white scale-110">
-                <Sparkles size={16} />
+                <Zap size={16} />
               </div>
             </div>
           </div>
@@ -566,6 +896,9 @@ export default function App() {
           <div className="flex justify-center gap-2 mb-6">
             <div className={cn("w-2 h-2 rounded-full", onboardingStep === 1 ? "bg-indigo-600" : "bg-indigo-100")} />
             <div className={cn("w-2 h-2 rounded-full", onboardingStep === 2 ? "bg-indigo-600" : "bg-indigo-100")} />
+            <div className={cn("w-2 h-2 rounded-full", onboardingStep === 3 ? "bg-indigo-600" : "bg-indigo-100")} />
+            <div className={cn("w-2 h-2 rounded-full", onboardingStep === 4 ? "bg-indigo-600" : "bg-indigo-100")} />
+            <div className={cn("w-2 h-2 rounded-full", onboardingStep === 5 ? "bg-indigo-600" : "bg-indigo-100")} />
           </div>
 
           {onboardingStep === 1 ? (
@@ -595,7 +928,57 @@ export default function App() {
                 </button>
               </form>
             </>
-          ) : (
+          ) : onboardingStep === 2 ? (
+            <form onSubmit={handleOnboarding} className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Professional Profile</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setOnboardingData(prev => ({ ...prev, employmentType: 'SALARIED' } as any))}
+                    className={cn(
+                      "py-4 rounded-2xl border font-bold text-sm transition-all",
+                      (onboardingData as any).employmentType === 'SALARIED' ? "bg-indigo-600 text-white border-indigo-600" : "bg-slate-50 text-slate-500 border-slate-100"
+                    )}
+                  >
+                    Salaried
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOnboardingData(prev => ({ ...prev, employmentType: 'BUSINESS' } as any))}
+                    className={cn(
+                      "py-4 rounded-2xl border font-bold text-sm transition-all",
+                      (onboardingData as any).employmentType === 'BUSINESS' ? "bg-indigo-600 text-white border-indigo-600" : "bg-slate-50 text-slate-500 border-slate-100"
+                    )}
+                  >
+                    Business
+                  </button>
+                </div>
+              </div>
+
+              {(onboardingData as any).employmentType === 'SALARIED' && (
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Salary Credit Bank</label>
+                  <input 
+                    required
+                    type="text" 
+                    placeholder="Enter Bank Name (e.g. HDFC, SBI)"
+                    className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-4 focus:ring-indigo-100 outline-none transition-all font-bold text-slate-900"
+                    value={(onboardingData as any).salaryBankName || ''}
+                    onChange={e => setOnboardingData(prev => ({ ...prev, salaryBankName: e.target.value } as any))}
+                  />
+                </motion.div>
+              )}
+
+              <button 
+                type="submit"
+                className="w-full py-5 bg-indigo-600 text-white rounded-[1.5rem] font-black uppercase tracking-widest shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all cursor-pointer flex items-center justify-center gap-3"
+              >
+                Continue
+                <ChevronRight size={20} />
+              </button>
+            </form>
+          ) : onboardingStep === 3 ? (
             <div className="space-y-6">
               <div>
                 <h3 className="text-xl font-black text-slate-800 tracking-tight">Source Accounts</h3>
@@ -647,6 +1030,9 @@ export default function App() {
                       if (tenure > 0) {
                         extraData.maturityDate = format(addMonths(parseISO(initDate), tenure), 'yyyy-MM-dd');
                       }
+                      if (type === 'RD') {
+                        extraData.monthlyInstallment = parseFloat(formData.get('monthlyInstallment') as string) || 0;
+                      }
                     }
                     
                     if (name) {
@@ -695,6 +1081,13 @@ export default function App() {
                     </motion.div>
                   )}
 
+                  {onboardingSourceType === 'RD' && (
+                    <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="space-y-1 pb-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Monthly Installment (₹)</label>
+                      <input required name="monthlyInstallment" type="number" step="0.01" placeholder="Ex. 5000" className="w-full px-4 py-3 bg-white border border-indigo-100 rounded-xl text-sm font-bold outline-none" />
+                    </motion.div>
+                  )}
+
                   {onboardingSourceType === 'FD' || onboardingSourceType === 'RD' ? (
                     <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="grid grid-cols-2 gap-3 pb-2">
                       <div className="space-y-1">
@@ -716,18 +1109,187 @@ export default function App() {
 
               <div className="flex gap-4">
                 <button 
-                  onClick={() => setOnboardingStep(1)}
+                  onClick={() => setOnboardingStep(2)}
                   className="flex-1 py-4 bg-slate-100 text-slate-500 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all"
                 >
                   Back
                 </button>
                 <button 
-                  disabled={onboardingSources.length === 0}
                   onClick={handleOnboarding}
-                  className="flex-[2] py-4 bg-indigo-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 disabled:opacity-50"
+                  className="flex-[2] py-4 bg-indigo-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100"
                 >
-                  Start My Treasury
+                  Continue
                 </button>
+              </div>
+            </div>
+          ) : onboardingStep === 4 ? (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-xl font-black text-slate-800 tracking-tight">Insurances & EMIs</h3>
+                <p className="text-xs font-bold text-slate-400 mt-1">Setup your recurring monthly bills.</p>
+              </div>
+
+              <div className="space-y-3 max-h-[250px] overflow-y-auto pr-2 scrollbar-hide">
+                {onboardingBudgets.map((budget, idx) => (
+                  <div key={idx} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex justify-between items-center">
+                    <div>
+                      <p className="text-sm font-black text-slate-800">{budget.category}</p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{formatCurrency(budget.amount)} / month</p>
+                    </div>
+                    <button onClick={() => setOnboardingBudgets(prev => prev.filter((_, i) => i !== idx))} className="text-slate-300 hover:text-rose-500">
+                      <X size={16} />
+                    </button>
+                  </div>
+                ))}
+                {onboardingBudgets.length === 0 && (
+                   <div className="py-12 text-center bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
+                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">No recurring bills added</p>
+                   </div>
+                )}
+              </div>
+
+              <form 
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const formData = new FormData(e.target as HTMLFormElement);
+                  const type = formData.get('billType') as string;
+                  const name = formData.get('billName') as string;
+                  const amount = parseFloat(formData.get('billAmount') as string) || 0;
+                  const finalCategory = type === 'Other EMI' ? (name || 'Other EMI') : type;
+                  
+                  if (amount > 0) {
+                    setOnboardingBudgets(prev => [...prev, { category: finalCategory, amount, period: 'MONTHLY' }]);
+                    (e.target as HTMLFormElement).reset();
+                  }
+                }}
+                className="p-5 bg-indigo-50/50 rounded-3xl border border-indigo-100 space-y-3"
+              >
+                    <select 
+                      name="billType" 
+                      defaultValue=""
+                      className="w-full px-4 py-3 bg-white border border-indigo-100 rounded-xl text-sm font-bold outline-none"
+                    >
+                      <option value="" disabled>Select Type</option>
+                  <optgroup label="Insurance">
+                    <option value="LIC">LIC Insurance Premiums</option>
+                    <option value="Bike Insurance">Bike Insurance</option>
+                    <option value="Health insurance">Health Insurance</option>
+                    <option value="Term Insurance">Term Insurance</option>
+                  </optgroup>
+                  <optgroup label="EMIs">
+                    <option value="Bike EMI">Bike EMI</option>
+                    <option value="Car EMI">Car EMI</option>
+                    <option value="House EMI">House EMI</option>
+                    <option value="Other EMI">Other EMI</option>
+                  </optgroup>
+                </select>
+                <input name="billName" type="text" placeholder="Bill Name (if Other)" className="w-full px-4 py-3 bg-white border border-indigo-100 rounded-xl text-sm font-bold outline-none" />
+                <input required name="billAmount" type="number" step="0.01" placeholder="Monthly Amount (₹)" className="w-full px-4 py-3 bg-white border border-indigo-100 rounded-xl text-sm font-bold outline-none" />
+                <button type="submit" className="w-full py-3 bg-white text-indigo-600 border border-indigo-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-50 transition-all flex items-center justify-center gap-2">
+                   <Plus size={14} /> Add Bill
+                </button>
+              </form>
+
+              <div className="flex gap-4">
+                <button onClick={() => setOnboardingStep(3)} className="flex-1 py-4 bg-slate-100 text-slate-500 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200">Back</button>
+                <button onClick={handleOnboarding} className="flex-[2] py-4 bg-indigo-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 shadow-xl shadow-indigo-100">Continue</button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-xl font-black text-slate-800 tracking-tight">Physical Assets</h3>
+                <p className="text-xs font-bold text-slate-400 mt-1">Add your Bike, Car, House, or other assets.</p>
+              </div>
+
+              <div className="space-y-3 max-h-[250px] overflow-y-auto pr-2 scrollbar-hide">
+                {onboardingAssets.map((asset, idx) => (
+                  <div key={idx} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex justify-between items-center">
+                    <div>
+                      <p className="text-sm font-black text-slate-800">{asset.name}</p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{asset.type} • {formatCurrency(asset.investedAmount)}</p>
+                    </div>
+                    <button onClick={() => setOnboardingAssets(prev => prev.filter((_, i) => i !== idx))} className="text-slate-300 hover:text-rose-500">
+                      <X size={16} />
+                    </button>
+                  </div>
+                ))}
+                {onboardingAssets.length === 0 && (
+                   <div className="py-12 text-center bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
+                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">No assets added yet</p>
+                   </div>
+                )}
+              </div>
+
+              <form 
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const formData = new FormData(e.target as HTMLFormElement);
+                  const name = formData.get('assetName') as string;
+                  const type = formData.get('assetType') as AssetType;
+                  const quantity = formData.get('goldWeight') || formData.get('silverWeight') ? parseFloat((formData.get('goldWeight') || formData.get('silverWeight')) as string) : undefined;
+                  const unitPrice = formData.get('goldPrice') || formData.get('silverPrice') ? parseFloat((formData.get('goldPrice') || formData.get('silverPrice')) as string) : undefined;
+                  const amount = quantity && unitPrice ? quantity * unitPrice : parseFloat(formData.get('assetVal') as string) || 0;
+                  const source = formData.get('assetSource') as string;
+                  
+                  if (name && (amount > 0 || (quantity && unitPrice))) {
+                    const assetData: Partial<Asset> = { 
+                      name, 
+                      type, 
+                      investedAmount: amount, 
+                      currentValue: amount,
+                      quantity,
+                      unitPrice,
+                      source
+                    };
+
+                    setOnboardingAssets(prev => [...prev, assetData as Asset]);
+                    (e.target as HTMLFormElement).reset();
+                  }
+                }}
+                className="p-5 bg-indigo-50/50 rounded-3xl border border-indigo-100 space-y-3"
+              >
+                <div className="grid grid-cols-2 gap-3">
+                  <select 
+                    name="assetType" 
+                    value={onboardingAssetType}
+                    onChange={(e) => setOnboardingAssetType(e.target.value as AssetType)}
+                    className="w-full px-4 py-3 bg-white border border-indigo-100 rounded-xl text-sm font-bold outline-none"
+                  >
+                    <option value="VEHICLE">Bike / Car (Vehicle)</option>
+                    <option value="REAL_ESTATE">House (Real Estate)</option>
+                    <option value="GOLD">Gold</option>
+                    <option value="SILVER">Silver</option>
+                    <option value="OTHER">Other Asset</option>
+                  </select>
+                  <select 
+                    required 
+                    name="assetSource" 
+                    defaultValue=""
+                    className="w-full px-4 py-3 bg-white border border-indigo-100 rounded-xl text-sm font-bold outline-none"
+                  >
+                    <option value="" disabled>Select Source Account*</option>
+                    {onboardingSources.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                  </select>
+                </div>
+                <input name="assetName" type="text" placeholder="Asset Name (e.g. My Bike)" className="w-full px-4 py-3 bg-white border border-indigo-100 rounded-xl text-sm font-bold outline-none" />
+                
+                {onboardingAssetType === 'GOLD' || onboardingAssetType === 'SILVER' ? (
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="grid grid-cols-2 gap-3">
+                    <input required name={onboardingAssetType === 'GOLD' ? "goldWeight" : "silverWeight"} type="number" step="0.001" placeholder="Weight (Grams)" className="w-full px-4 py-3 bg-white border border-indigo-100 rounded-xl text-sm font-bold outline-none" />
+                    <input required name={onboardingAssetType === 'GOLD' ? "goldPrice" : "silverPrice"} type="number" step="0.01" placeholder="Price (per Gram)" className="w-full px-4 py-3 bg-white border border-indigo-100 rounded-xl text-sm font-bold outline-none" />
+                  </motion.div>
+                ) : (
+                  <input required name="assetVal" type="number" step="0.01" placeholder="Current Value (₹)" className="w-full px-4 py-3 bg-white border border-indigo-100 rounded-xl text-sm font-bold outline-none" />
+                )}
+                <button type="submit" className="w-full py-3 bg-white text-indigo-600 border border-indigo-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-50 transition-all flex items-center justify-center gap-2">
+                   <Plus size={14} /> Add Asset
+                </button>
+              </form>
+
+              <div className="flex gap-4">
+                <button onClick={() => setOnboardingStep(4)} className="flex-1 py-4 bg-slate-100 text-slate-500 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200">Back</button>
+                <button onClick={handleOnboarding} className="flex-[2] py-4 bg-indigo-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 shadow-xl shadow-indigo-100">Finish Setup</button>
               </div>
             </div>
           )}
@@ -789,6 +1351,17 @@ export default function App() {
           </button>
 
           <button 
+            onClick={() => setActiveTab('TAX_PLANNING')}
+            className={cn(
+              "px-6 py-2.5 rounded-xl font-bold text-xs transition-all whitespace-nowrap flex items-center gap-2",
+              activeTab === 'TAX_PLANNING' ? "bg-white text-indigo-600 shadow-lg shadow-indigo-100/50" : "text-slate-500 hover:text-slate-700"
+            )}
+          >
+            <Scale size={14} className={activeTab === 'TAX_PLANNING' ? "text-indigo-600" : "text-slate-400"} />
+            Tax Planning
+          </button>
+
+          <button 
             onClick={() => setActiveTab('SETTINGS')}
             className={cn(
               "px-6 py-2.5 rounded-xl font-bold text-xs transition-all whitespace-nowrap",
@@ -796,22 +1369,6 @@ export default function App() {
             )}
           >
             Preferences
-          </button>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button 
-            onClick={generateAdvice}
-            disabled={isGeneratingAdvice}
-            className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl hover:bg-indigo-100 transition-all disabled:opacity-50 group relative"
-            title="AI Financial Insights"
-          >
-            {isGeneratingAdvice ? (
-              <RefreshCw size={20} className="animate-spin" />
-            ) : (
-              <BrainCircuit size={20} />
-            )}
-            <div className="absolute -top-1 -right-1 w-3 h-3 bg-rose-500 rounded-full border-2 border-white animate-pulse" />
           </button>
         </div>
       </div>
@@ -829,10 +1386,31 @@ export default function App() {
                 </p>
                 <span className="text-slate-300">•</span>
                 <div className="flex items-center gap-2 px-3 py-1 bg-indigo-50 rounded-full">
-                  <Sparkles size={12} className="text-indigo-600" />
+                  <Zap size={12} className="text-indigo-600" />
                   <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">Financial Health: {calculateHealthScore(totalStats, transactions)}%</span>
                 </div>
               </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={handleRecordSalary}
+                className="flex items-center gap-2 px-5 py-3 bg-emerald-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all no-print"
+              >
+                <Briefcase size={16} />
+                Record Salary
+              </button>
+              <button 
+                onClick={() => {
+                  setIsAddingTransaction(true);
+                  setEditingTransaction(null);
+                  setSelectedCategory(DEFAULT_CATEGORIES[0].name);
+                }}
+                className="flex items-center gap-2 px-5 py-3 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-slate-100 hover:bg-slate-800 transition-all no-print"
+              >
+                <Plus size={16} />
+                New Entry
+              </button>
             </div>
           </div>
 
@@ -850,15 +1428,18 @@ export default function App() {
                 <p className="text-2xl font-black text-slate-900 tracking-tight">{formatCurrency(totalStats.investmentsTotal)}</p>
              </button>
 
-             <div className="flex-1 min-w-[180px] bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm text-left flex flex-col justify-between">
-                <div>
-                  <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center mb-3">
-                    <Wallet size={20} />
-                  </div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Cash & Bank</p>
-                </div>
-                <p className="text-2xl font-black text-slate-900 tracking-tight">{formatCurrency(totalStats.totalAssetsLiquid)}</p>
-             </div>
+              <div className="flex-1 min-w-[180px] bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm text-left flex flex-col justify-between">
+                 <div>
+                   <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center mb-3">
+                     <Wallet size={20} />
+                   </div>
+                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Cash on Hand</p>
+                 </div>
+                 <div>
+                   <p className="text-2xl font-black text-slate-900 tracking-tight">{formatCurrency(totalStats.cashOnHand)}</p>
+                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">Total Liquid: {formatCurrency(totalStats.totalAssetsLiquid)}</p>
+                 </div>
+              </div>
 
              <div className="flex-1 min-w-[180px] bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm text-left flex flex-col justify-between">
                 <div>
@@ -868,6 +1449,16 @@ export default function App() {
                   <p className="text-[10px] font-black text-rose-400 uppercase tracking-widest mb-1">Total Credit Dues</p>
                 </div>
                 <p className="text-2xl font-black text-rose-600 tracking-tight">{formatCurrency(totalStats.totalLiabilities)}</p>
+             </div>
+
+             <div className="flex-1 min-w-[180px] bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm text-left flex flex-col justify-between group cursor-pointer" onClick={() => setActiveTab('TAX_PLANNING')}>
+                <div>
+                  <div className="w-10 h-10 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                    <Scale size={20} />
+                  </div>
+                  <p className="text-[10px] font-black text-amber-500 uppercase tracking-widest mb-1">Income Tax Est.</p>
+                </div>
+                <p className="text-2xl font-black text-slate-900 tracking-tight">{formatCurrency(totalStats.taxEstimated / 12)} <span className="text-[10px] text-slate-400">/mo</span></p>
              </div>
 
              <div className="hidden xl:flex flex-1 min-w-[180px] bg-slate-50 p-6 rounded-[2.5rem] border border-slate-100 text-left flex flex-col justify-between">
@@ -886,23 +1477,82 @@ export default function App() {
       <main className="grid grid-cols-12 gap-6 flex-grow pb-12">
         {activeTab === 'DASHBOARD' ? (
           <>
-            {/* FD Maturity Alerts */}
-            {fdMaturityAlerts.length > 0 && (
+            {/* Monthly Budget Progress Section */}
+            <div className="col-span-12 mb-8 animate-in fade-in slide-in-from-top-4 duration-500">
+               <div className="bg-indigo-600 rounded-[2.5rem] p-8 text-white shadow-xl shadow-indigo-100 flex flex-col md:flex-row items-center gap-8 relative overflow-hidden group">
+                  <TrendingUp className="absolute -right-6 -top-6 w-48 h-48 text-white/10 group-hover:scale-110 transition-all duration-700" />
+                  <div className="w-20 h-20 bg-white/10 rounded-3xl flex items-center justify-center shrink-0 border border-white/20">
+                    <Calculator size={36} />
+                  </div>
+                  <div className="flex-1 w-full relative z-10">
+                    <div className="flex items-center gap-2 mb-2">
+                       <span className="w-2 h-2 bg-indigo-300 rounded-full animate-pulse" />
+                       <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-200">Executive Budget Pulse</h3>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
+                       <div>
+                          <p className="text-[9px] font-bold text-indigo-300 uppercase tracking-widest mb-1">Target</p>
+                          <p className="text-2xl font-black">{formatCurrency(totalRequiredAmount)}</p>
+                       </div>
+                       <div>
+                          <p className="text-[9px] font-bold text-indigo-300 uppercase tracking-widest mb-1">Completed</p>
+                          <p className="text-2xl font-black">{formatCurrency(reportStats.expenses + reportStats.investments)}</p>
+                       </div>
+                       <div>
+                          <p className="text-[9px] font-bold text-indigo-300 uppercase tracking-widest mb-1">Available</p>
+                          <p className="text-2xl font-black">{formatCurrency(Math.max(0, totalRequiredAmount - (reportStats.expenses + reportStats.investments)))}</p>
+                       </div>
+                       <div>
+                          <p className="text-[9px] font-bold text-indigo-300 uppercase tracking-widest mb-1">Usage</p>
+                          <p className="text-2xl font-black">{Math.min(100, Math.round(((reportStats.expenses + reportStats.investments) / (totalRequiredAmount || 1)) * 100))}%</p>
+                       </div>
+                    </div>
+                    <div className="mt-8 bg-indigo-500/50 h-2.5 rounded-full overflow-hidden border border-indigo-400">
+                       <motion.div 
+                        initial={{ width: 0 }}
+                        animate={{ width: `${Math.min(100, ((reportStats.expenses + reportStats.investments) / (totalRequiredAmount || 1)) * 100)}%` }}
+                        className="h-full bg-white rounded-full shadow-[0_0_15px_rgba(255,255,255,0.4)]"
+                       />
+                    </div>
+                  </div>
+               </div>
+            </div>
+
+            {/* Asset Reminders & Maturity Alerts */}
+            {allAlerts.length > 0 && (
               <div className="col-span-12 mb-6">
                 <div className="space-y-3">
-                  {fdMaturityAlerts.map(fd => (
+                  {allAlerts.map(alert => (
                     <motion.div 
-                      key={fd.id}
+                      key={alert.id}
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
-                      className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center gap-4"
+                      className={cn(
+                        "p-4 border rounded-2xl flex items-center gap-4",
+                        alert.alertType === 'FD_MATURITY' ? "bg-amber-50 border-amber-200" : "bg-rose-50 border-rose-200"
+                      )}
                     >
-                      <div className="w-10 h-10 bg-amber-100 text-amber-600 rounded-xl flex items-center justify-center shrink-0">
-                        <CalendarIcon size={20} />
+                      <div className={cn(
+                        "w-10 h-10 rounded-xl flex items-center justify-center shrink-0",
+                        alert.alertType === 'FD_MATURITY' ? "bg-amber-100 text-amber-600" : "bg-rose-100 text-rose-600"
+                      )}>
+                        {alert.alertType === 'FD_MATURITY' ? <CalendarIcon size={20} /> : <FileText size={20} />}
                       </div>
                       <div className="flex-1">
-                        <p className="text-sm font-black text-amber-900 uppercase tracking-tight">FD Maturity Alert: {fd.name}</p>
-                        <p className="text-xs font-bold text-amber-600">This FD of {formatCurrency(fd.initialBalance)} is maturing on {format(parseISO(fd.maturityDate!), 'dd MMM yyyy')} ({fd.daysLeft} days left).</p>
+                        <p className={cn(
+                          "text-sm font-black uppercase tracking-tight",
+                          alert.alertType === 'FD_MATURITY' ? "text-amber-900" : "text-rose-900"
+                        )}>
+                          {alert.alertType === 'FD_MATURITY' ? 'FD Maturity Alert' : 'Insurance Renewal Alert'}: {alert.name}
+                        </p>
+                        <p className={cn(
+                          "text-xs font-bold",
+                          alert.alertType === 'FD_MATURITY' ? "text-amber-600" : "text-rose-600"
+                        )}>
+                          {alert.alertType === 'FD_MATURITY' 
+                            ? `This FD is maturing on ${format(parseISO((alert as any).maturityDate!), 'dd MMM yyyy')} (${(alert as any).daysLeft} days left).` 
+                            : `The policy renewal for ${(alert as any).insuranceCompany || alert.name} is due on ${format(parseISO((alert as any).renewalDate!), 'dd MMM yyyy')} (${(alert as any).daysLeft} days left).`}
+                        </p>
                       </div>
                     </motion.div>
                   ))}
@@ -1079,9 +1729,30 @@ export default function App() {
                 </div>
                 <div className="mt-6 space-y-4">
                   <div className="grid grid-cols-3 gap-2 h-2.5">
-                    <div className="bg-indigo-500 rounded-full" style={{ width: '100%' }} />
-                    <div className="bg-amber-400 rounded-full" style={{ width: '100%' }} />
-                    <div className="bg-emerald-400 rounded-full" style={{ width: '100%' }} />
+                    <div className="bg-white/10 rounded-full overflow-hidden">
+                      <div 
+                        className={cn(
+                          "h-full rounded-full transition-all duration-1000",
+                          totalStats.budgetRules.needs > 50 ? "bg-rose-500" : "bg-indigo-500"
+                        )}
+                        style={{ width: `${Math.min(100, (totalStats.budgetRules.needs / 50) * 100)}%` }}
+                      />
+                    </div>
+                    <div className="bg-white/10 rounded-full overflow-hidden">
+                      <div 
+                        className={cn(
+                          "h-full rounded-full transition-all duration-1000",
+                          totalStats.budgetRules.wants > 30 ? "bg-rose-500" : "bg-amber-400"
+                        )}
+                        style={{ width: `${Math.min(100, (totalStats.budgetRules.wants / 30) * 100)}%` }}
+                      />
+                    </div>
+                    <div className="bg-white/10 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-emerald-400 rounded-full transition-all duration-1000"
+                        style={{ width: `${Math.min(100, (totalStats.budgetRules.savings / 20) * 100)}%` }}
+                      />
+                    </div>
                   </div>
                   <div className="flex justify-between items-center gap-4">
                      <div className="flex flex-col">
@@ -1090,7 +1761,10 @@ export default function App() {
                      </div>
                      <div className="flex flex-col">
                         <span className="text-[8px] font-black uppercase text-amber-300">Wants (30%)</span>
-                        <span className="text-sm font-black text-amber-400">TBD</span>
+                        <span className={cn(
+                          "text-sm font-black",
+                          totalStats.budgetRules.wants > 30 ? "text-rose-400" : "text-amber-400"
+                        )}>{Math.round(totalStats.budgetRules.wants)}%</span>
                      </div>
                      <div className="flex flex-col">
                         <span className="text-[8px] font-black uppercase text-emerald-300">Savings (20%)</span>
@@ -1100,58 +1774,6 @@ export default function App() {
                 </div>
               </div>
             </div>
-
-            {/* AI Executive Summary */}
-            {aiAdvice && (
-              <motion.div 
-                initial={{ opacity: 0, y: -20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="col-span-12 mb-4 no-print"
-              >
-                <div className="bg-white rounded-[2.5rem] p-1 shadow-xl shadow-indigo-100 border border-indigo-50">
-                  <div className="bg-white rounded-[2.4rem] p-8 md:p-10">
-                    <div className="flex flex-col md:flex-row justify-between items-start gap-8">
-                      <div className="flex-1 space-y-6">
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-lg">
-                            <Sparkles size={28} />
-                          </div>
-                          <div>
-                            <h3 className="text-xl font-black text-slate-800 tracking-tight">Executive Summary</h3>
-                            <p className="text-[10px] font-black text-indigo-500 uppercase tracking-[0.2em] mt-1">AI Financial Advisory</p>
-                          </div>
-                        </div>
-                        <div className="markdown-body line-clamp-4 overflow-hidden relative">
-                          <Markdown>{aiAdvice}</Markdown>
-                          <div className="absolute bottom-0 left-0 w-full h-12 bg-gradient-to-t from-white to-transparent" />
-                        </div>
-                        <button 
-                          onClick={() => setShowAiPanel(true)}
-                          className="bg-slate-900 text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-800 transition-all flex items-center gap-2"
-                        >
-                          View Deep Insight
-                          <ChevronRight size={16} />
-                        </button>
-                      </div>
-                      <div className="w-full md:w-64 space-y-4">
-                        <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Portfolio Net Worth</p>
-                          <div className="font-black text-xl text-slate-900 tracking-tight">
-                            {formatCurrency(totalStats.netWorth)}
-                          </div>
-                        </div>
-                        <div className="p-6 bg-indigo-50 rounded-3xl border border-indigo-100 text-center">
-                          <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest mb-3">Health Score</p>
-                          <div className="font-black text-2xl text-indigo-600">
-                            {calculateHealthScore(totalStats, transactions)}/100
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            )}
 
             {/* Financial Goals - Active Section */}
             <div className="col-span-12 mb-6 no-print">
@@ -1170,7 +1792,7 @@ export default function App() {
                
                {activeGoals.length === 0 ? (
                  <div className="bg-slate-50 rounded-[2rem] p-10 border border-slate-100 text-center">
-                    <Sparkles size={32} className="text-indigo-100 mx-auto mb-3" />
+                    <Zap size={32} className="text-indigo-100 mx-auto mb-3" />
                     <p className="text-xs font-black text-slate-400 uppercase tracking-widest">No Active Goals</p>
                     <p className="text-[10px] font-bold text-slate-300 mt-1">All milestones achieved or none set.</p>
                  </div>
@@ -1288,9 +1910,9 @@ export default function App() {
                <div className="bg-white rounded-[2.5rem] p-8 border border-slate-100 shadow-sm flex flex-col justify-between h-full bg-slate-50/50">
                   <div>
                     <div className="w-12 h-12 bg-slate-100 rounded-2xl flex items-center justify-center mb-6 shadow-inner">
-                      <BrainCircuit size={24} className="text-indigo-600" />
+                      <Wallet size={24} className="text-indigo-600" />
                     </div>
-                    <h3 className="font-black text-xl text-slate-900 tracking-tight mb-2">Executive Summary</h3>
+                    <h3 className="font-black text-xl text-slate-900 tracking-tight mb-2">Portfolio Overview</h3>
                     <p className="text-slate-500 text-sm leading-relaxed font-medium mb-6">
                       Based on current activity, you are maintaining a healthy reserve. 
                       Detailed breakdowns of your spending, payees, and history have been consolidated in the Transactions tab.
@@ -1407,18 +2029,26 @@ export default function App() {
                                     </div>
                                   </div>
                                 </div>
-                                <button 
-                                  onClick={() => setAssets(prev => prev.filter(a => a.id !== asset.id))}
-                                  className="p-1.5 text-slate-300 hover:text-rose-500 transition-all rounded-full hover:bg-rose-50 group-hover:bg-white/50"
-                                >
-                                  <X size={14} />
-                                </button>
+                                <div className="flex items-center gap-2">
+                                  <button 
+                                    onClick={() => setEditingAsset(asset)}
+                                    className="p-1.5 text-slate-300 hover:text-indigo-500 transition-all rounded-full hover:bg-indigo-50 group-hover:bg-white/50"
+                                  >
+                                    <History size={14} />
+                                  </button>
+                                  <button 
+                                    onClick={() => setAssets(prev => prev.filter(a => a.id !== asset.id))}
+                                    className="p-1.5 text-slate-300 hover:text-rose-500 transition-all rounded-full hover:bg-rose-50 group-hover:bg-white/50"
+                                  >
+                                    <X size={14} />
+                                  </button>
+                                </div>
                               </div>
 
                               <div className="grid grid-cols-2 gap-3 mb-4 relative z-10">
                                 <div className="bg-white/30 rounded-xl p-3 border border-white/50">
                                   <p className="text-[8px] font-black uppercase tracking-widest text-slate-400 mb-0.5">
-                                    {asset.type === 'INSURANCE' ? 'Sum Assured' : 'Investment'}
+                                    {asset.type === 'INSURANCE' ? 'Sum Assured' : (asset.type === 'RD' ? 'Monthly Installment' : 'Investment')}
                                   </p>
                                   <p className="text-md font-black text-slate-900 tracking-tight">
                                     {formatCurrency(asset.type === 'INSURANCE' && asset.sumAssured ? asset.sumAssured : asset.investedAmount)}
@@ -1427,7 +2057,7 @@ export default function App() {
                                 {asset.type === 'INSURANCE' ? (
                                   <div className="flex gap-2">
                                     <div className="flex-1 bg-white/30 rounded-xl p-3 border border-white/50">
-                                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-400 mb-0.5">Premium Paid</p>
+                                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-400 mb-0.5">Total amount paid as a premium</p>
                                       <p className="text-md font-black text-slate-900 tracking-tight">{formatCurrency(asset.investedAmount)}</p>
                                       {asset.premiumFrequency && (
                                         <p className="text-[7px] font-bold text-slate-400 uppercase mt-1">({asset.premiumFrequency.replace('_', ' ')})</p>
@@ -1465,6 +2095,7 @@ export default function App() {
                                 )}
                               </div>
 
+                              {/* Asset specific timelines */}
                               {['FD', 'RD'].includes(asset.type) && asset.startDate && asset.endDate && (
                                 <div className="mb-4 space-y-1.5 relative z-10 bg-white/30 p-3 rounded-xl border border-white/50">
                                   <div className="flex justify-between items-center text-[7px] font-black uppercase tracking-widest text-slate-500">
@@ -1488,9 +2119,20 @@ export default function App() {
                                     <span>{format(parseISO(asset.endDate), 'MMM dd, yyyy')}</span>
                                   </div>
                                   {asset.maturityAmount && (
-                                    <div className="mt-2 pt-2 border-t border-slate-100/30 flex justify-between items-center">
-                                      <span className="text-[7px] font-black uppercase tracking-widest text-slate-400">Est. Maturity Amount</span>
-                                      <span className="text-[9px] font-black text-amber-600">{formatCurrency(asset.maturityAmount)}</span>
+                                    <div className="mt-2 pt-2 border-t border-slate-100/30 space-y-2">
+                                      <div className="flex justify-between items-center">
+                                        <span className="text-[7px] font-black uppercase tracking-widest text-slate-400">Est. Maturity Amount</span>
+                                        <span className="text-[9px] font-black text-amber-600">{formatCurrency(asset.maturityAmount)}</span>
+                                      </div>
+                                      {['RD', 'FD'].includes(asset.type) && (
+                                        <button 
+                                          onClick={() => setIsToppingUpAsset(asset)}
+                                          className="w-full py-1.5 bg-amber-100/50 hover:bg-amber-100 text-amber-700 text-[8px] font-black uppercase tracking-widest rounded-lg transition-colors flex items-center justify-center gap-1"
+                                        >
+                                          <Plus size={10} />
+                                          Top-up RD/FD
+                                        </button>
+                                      )}
                                     </div>
                                   )}
                                 </div>
@@ -1512,6 +2154,34 @@ export default function App() {
                                         {formatCurrency(asset.unitPrice || (asset.investedAmount / (asset.quantity || 1)))}
                                       </p>
                                    </div>
+                                </div>
+                              )}
+
+                              {/* Policy Details & Notes */}
+                              {(asset.policyNumber || asset.renewalDate || asset.notes) && (
+                                <div className="mb-4 pt-4 border-t border-white/30 space-y-2 relative z-10">
+                                  <div className="grid grid-cols-2 gap-2">
+                                    {asset.policyNumber && (
+                                      <div className="bg-white/40 rounded-lg p-2 border border-white/60">
+                                        <p className="text-[7px] font-black uppercase tracking-widest text-slate-400 mb-0.5">Policy No.</p>
+                                        <p className="text-[9px] font-black text-slate-800 tracking-tighter truncate">{asset.policyNumber}</p>
+                                      </div>
+                                    )}
+                                    {asset.renewalDate && (
+                                      <div className="bg-rose-50/40 rounded-lg p-2 border border-rose-100/60">
+                                        <p className="text-[7px] font-black uppercase tracking-widest text-rose-400 mb-0.5">Next Renewal</p>
+                                        <p className="text-[9px] font-black text-rose-600 tracking-tighter">
+                                          {format(parseISO(asset.renewalDate), 'dd MMM yy')}
+                                        </p>
+                                      </div>
+                                    )}
+                                  </div>
+                                  {asset.notes && (
+                                    <div className="bg-slate-50/40 rounded-xl p-2 border border-slate-100/60">
+                                      <p className="text-[7px] font-black uppercase tracking-widest text-slate-400 mb-0.5">Notes</p>
+                                      <p className="text-[9px] font-medium text-slate-600 leading-tight italic line-clamp-2">"{asset.notes}"</p>
+                                    </div>
+                                  )}
                                 </div>
                               )}
 
@@ -1541,10 +2211,10 @@ export default function App() {
                        <h3 className="font-black text-lg mb-6 text-slate-800 tracking-tight">Asset Distribution</h3>
                        
                        <div className="h-[200px] w-full mb-8 relative">
-                         <ResponsiveContainer width="100%" height="100%">
+                         <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                             <PieChart>
                                <Pie
-                                 data={['MUTUAL_FUND', 'STOCK', 'FD', 'INSURANCE', 'GOLD', 'SILVER', 'OTHER'].map(type => ({
+                                 data={['MUTUAL_FUND', 'STOCK', 'FD', 'RD', 'INSURANCE', 'GOLD', 'SILVER', 'OTHER'].map(type => ({
                                    name: type.replace('_', ' '),
                                    value: assets.filter(a => a.type === type).reduce((s, a) => s + a.investedAmount, 0)
                                  })).filter(d => d.value > 0)}
@@ -1608,19 +2278,19 @@ export default function App() {
                         <div className="mt-10 pt-8 border-t border-slate-100 dark:border-slate-800">
                           <div className="flex items-center gap-2 mb-6">
                             <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-600">Rebalancing Mode</h4>
-                            <Sparkles size={12} className="text-indigo-400" />
+                            <Zap size={12} className="text-indigo-400" />
                           </div>
                           <div className="space-y-4">
                             {[
-                              { name: 'Equity (High Growth)', key: 'equity', color: 'bg-indigo-500', target: 60 },
+                              { name: 'Equity (High Growth)', key: 'equity', color: 'bg-indigo-500', target: 50 },
                               { name: 'Stability (Debt/FD)', key: 'debt', color: 'bg-amber-500', target: 30 },
-                              { name: 'Safety (Gold/Cash)', key: 'safe', color: 'bg-emerald-500', target: 10 }
+                              { name: 'Safety (Gold/Cash)', key: 'safe', color: 'bg-emerald-500', target: 20 }
                             ].map(cat => {
                               const totalVal = assets.reduce((s, a) => s + (a.currentValue || a.investedAmount), 0);
                               const eq = assets.filter(a => ['STOCK', 'MUTUAL_FUND', 'CRYPTO'].includes(a.type)).reduce((s, a) => s + (a.currentValue || a.investedAmount), 0);
                               const dbt = assets.filter(a => ['FD', 'PPF_EPF'].includes(a.type)).reduce((s, a) => s + (a.currentValue || a.investedAmount), 0);
-                              const sf = totalStats.totalAssetsLiquid + assets.filter(a => ['GOLD', 'SILVER'].includes(a.type)).reduce((s, a) => s + (a.currentValue || a.investedAmount), 0);
-                              const whl = totalVal + totalStats.totalAssetsLiquid;
+                              const sf = totalStats.cashOnHand + assets.filter(a => ['GOLD', 'SILVER'].includes(a.type)).reduce((s, a) => s + (a.currentValue || a.investedAmount), 0);
+                              const whl = totalVal + totalStats.cashOnHand;
                               const cP = whl > 0 ? (cat.key === 'equity' ? eq : cat.key === 'debt' ? dbt : sf) / whl * 100 : 0;
                               const d = cP - cat.target;
                               return (
@@ -1631,9 +2301,13 @@ export default function App() {
                                   </div>
                                   <div className="flex items-center gap-3">
                                     <div className="flex-1 h-1 bg-slate-200 rounded-full overflow-hidden">
-                                       <div className={cn("h-full transition-all duration-1000", cat.color)} style={{ width: `${Math.min(100, cP)}%` }} />
+                                       <div className={cn("h-full transition-all duration-1000", cat.color)} style={{ width: `${Math.min(100, (cP / Math.max(100, cP)) * 100)}%` }} />
                                     </div>
-                                    <span className={cn("text-[7px] font-black px-1.5 py-0.5 rounded", Math.abs(d) < 5 ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600")}>
+                                    <span className={cn(
+                                      "text-[7px] font-black px-1.5 py-0.5 rounded uppercase tracking-tighter",
+                                      Math.abs(d) < 5 ? "bg-emerald-50 text-emerald-600" : 
+                                      d > 5 ? "bg-rose-50 text-rose-600" : "bg-indigo-50 text-indigo-600"
+                                    )}>
                                       {d > 5 ? `SELL` : d < -5 ? `BUY` : 'OK'}
                                     </span>
                                   </div>
@@ -1644,23 +2318,128 @@ export default function App() {
                         </div>
 
                           <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400 mb-2 text-center">Portfolio Valuation</p>
-                          <p className="text-3xl font-black text-center text-indigo-900">{formatCurrency(assets.reduce((sum, a) => sum + a.investedAmount, 0))}</p>
+                          <p className="text-3xl font-black text-center text-indigo-900">{formatCurrency(assets.reduce((sum, a) => sum + (a.currentValue || a.investedAmount), 0) + totalStats.cashOnHand)}</p>
                        </div>
                      </div>
               </div>
            </div>
         </div>
         ) : activeTab === 'BUDGETS' ? (
-          <div className="col-span-12 flex flex-col gap-8 max-w-4xl mx-auto w-full">
-            <div className="bg-white rounded-[2rem] p-8 md:p-12 border border-slate-100 shadow-sm w-full">
-               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-10">
-                  <div>
-                    <h2 className="text-3xl font-black text-slate-800 mb-2">Monthly Budgets</h2>
-                    <p className="text-slate-500 font-medium tracking-tight">Set spending limits for each category to track your financial health.</p>
+          <div className="col-span-12 flex flex-col gap-8 max-w-5xl mx-auto w-full">
+            {/* Live Tracking Header */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+               <div className="md:col-span-2 bg-slate-900 rounded-[2.5rem] p-8 text-white relative overflow-hidden shadow-xl">
+                  <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full -mr-20 -mt-20 blur-3xl" />
+                  <div className="relative z-10 flex flex-col h-full justify-between">
+                     <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-300 mb-1">Current Month Progress</p>
+                        <h2 className="text-3xl font-black mb-6">Budget Analytics</h2>
+                     </div>
+                     <div className="space-y-4">
+                        <div className="flex justify-between items-end">
+                           <div>
+                              <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Total Spent (Budgeted Categories)</p>
+                              <p className="text-2xl font-black text-white">{formatCurrency(Object.entries(currentMonthCategorySpending).filter(([cat]) => budgets[cat] > 0).reduce((s, [, a]) => s + a, 0))}</p>
+                           </div>
+                           <div className="text-right">
+                              <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Monthly Limit</p>
+                              <p className="text-lg font-black text-indigo-300">{formatCurrency(totalRequiredAmount)}</p>
+                           </div>
+                        </div>
+                        <div className="w-full h-3 bg-white/10 rounded-full overflow-hidden">
+                           <motion.div 
+                             initial={{ width: 0 }}
+                             animate={{ width: `${Math.min(100, (Object.entries(currentMonthCategorySpending).filter(([cat]) => budgets[cat] > 0).reduce((s, [, a]) => s + a, 0) / (totalRequiredAmount || 1)) * 100)}%` }}
+                             className={cn(
+                               "h-full rounded-full transition-all duration-1000",
+                               (Object.entries(currentMonthCategorySpending).filter(([cat]) => budgets[cat] > 0).reduce((s, [, a]) => s + a, 0) / (totalRequiredAmount || 1)) > 1 ? "bg-rose-500" : "bg-indigo-500"
+                             )}
+                           />
+                        </div>
+                     </div>
                   </div>
-                  <div className="flex flex-col items-center md:items-end bg-indigo-50 p-4 rounded-2xl border border-indigo-100 min-w-[180px]">
-                    <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1">Total Monthly Budget</p>
-                    <p className="text-2xl font-black text-indigo-600">{formatCurrency(totalRequiredAmount)}</p>
+               </div>
+               
+               <div className="bg-white rounded-[2.5rem] p-8 border border-slate-100 shadow-sm flex flex-col justify-between">
+                  <div>
+                    <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-4">
+                       <Target size={24} />
+                    </div>
+                    <h3 className="font-black text-lg text-slate-800 tracking-tight">Financial Shield</h3>
+                    <p className="text-xs font-medium text-slate-500 leading-relaxed mt-2">
+                       You've budgeted for {Object.keys(budgets).filter(k => budgets[k] > 0).length} categories. Tracking these helps prevent lifestyle inflation.
+                    </p>
+                  </div>
+                  <div className="mt-6 pt-6 border-t border-slate-50">
+                     <span className="text-[10px] font-black uppercase tracking-widest text-slate-300">Accountability Score</span>
+                     <p className="text-xl font-black text-slate-900 mt-1">
+                        {Math.max(0, 100 - Math.round((Object.entries(currentMonthCategorySpending).filter(([cat]) => budgets[cat] > 0).reduce((s, [, a]) => s + a, 0) / (totalRequiredAmount || 1)) * 50))}%
+                     </p>
+                  </div>
+               </div>
+            </div>
+
+            {/* Category Performance */}
+            <div className="bg-white rounded-[2.5rem] p-8 border border-slate-100 shadow-sm">
+               <h3 className="text-xl font-black text-slate-800 mb-6 flex items-center gap-2">
+                  <PieChartIcon size={20} className="text-indigo-600" />
+                  Live Spending vs Budget
+               </h3>
+               
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {DEFAULT_CATEGORIES.filter(c => budgets[c.name] > 0).map(cat => {
+                    const spent = currentMonthCategorySpending[cat.name] || 0;
+                    let budget = budgets[cat.name];
+                    if (cat.name === 'Property Tax Yearly once' || cat.name === 'Insurance Premiums') {
+                      budget = budget / 12;
+                    }
+                    const perc = (spent / (budget || 1)) * 100;
+                    const isOver = spent > budget;
+
+                    return (
+                      <div key={cat.name} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 hover:border-indigo-100 transition-all">
+                         <div className="flex justify-between items-start mb-3">
+                            <div className="flex items-center gap-3">
+                               <span className="text-xl">{cat.icon}</span>
+                               <div>
+                                  <p className="text-xs font-black text-slate-700">{cat.name}</p>
+                                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">
+                                     {formatCurrency(spent)} of {formatCurrency(budget)}
+                                  </p>
+                               </div>
+                            </div>
+                            <span className={cn(
+                               "text-[10px] font-black px-2 py-0.5 rounded-lg",
+                               isOver ? "bg-rose-100 text-rose-600" : "bg-emerald-100 text-emerald-600"
+                            )}>
+                               {isOver ? `Over by ${formatCurrency(spent - budget)}` : `${Math.round(100 - perc)}% Left`}
+                            </span>
+                         </div>
+                         <div className="w-full h-1.5 bg-white/50 rounded-full overflow-hidden">
+                            <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ width: `${Math.min(100, perc)}%` }}
+                              className={cn(
+                                "h-full rounded-full",
+                                isOver ? "bg-rose-500" : perc > 80 ? "bg-amber-400" : "bg-indigo-500"
+                              )}
+                            />
+                         </div>
+                      </div>
+                    );
+                  })}
+               </div>
+            </div>
+
+            {/* Manage Budget Limits (Original UI) */}
+            <div className="bg-white rounded-[2rem] p-8 md:p-12 border border-slate-100 shadow-sm w-full">
+               <div className="flex items-center gap-3 mb-8">
+                  <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center">
+                     <Calculator size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-2xl font-black text-slate-800 tracking-tight">Budget Planner</h3>
+                    <p className="text-slate-500 text-xs font-medium">Fine-tune your monthly allocations and yearly prorations.</p>
                   </div>
                </div>
 
@@ -1700,13 +2479,22 @@ export default function App() {
                  ))}
                </div>
                
-               <div className="mt-12 p-6 bg-slate-50 rounded-2xl border border-slate-100 flex items-start gap-4">
-                  <Sparkles size={20} className="text-indigo-500 mt-1" />
-                  <p className="text-xs font-medium text-slate-500 leading-relaxed">
-                    Set realistic budgets for your core expenses. Your <span className="font-bold text-slate-700">Financial Health Score</span> and the <span className="font-bold text-slate-700">Budget Usage</span> gauges on your dashboard will reflect these limits helping you stay on track.
-                  </p>
+               <div className="mt-12 p-6 bg-emerald-50 rounded-2xl border border-emerald-100 flex items-start gap-4">
+                  <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-emerald-600 shrink-0 shadow-sm border border-emerald-100">
+                     <TrendingDown size={20} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-emerald-800 mb-1">Tax Optimized Budgets</p>
+                    <p className="text-xs text-emerald-600/80 leading-relaxed font-medium">
+                      Budgets marked with <span className="font-bold">Yearly Prorated</span> help you save exactly for large annual dues like Property Tax and Insurances. You can also plan your 80C investments in the <span className="font-black underline cursor-pointer" onClick={() => setActiveTab('TAX_PLANNING')}>Tax Planning</span> section.
+                    </p>
+                  </div>
                </div>
             </div>
+          </div>
+        ) : activeTab === 'TAX_PLANNING' ? (
+          <div className="col-span-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <TaxEngine />
           </div>
         ) : activeTab === 'SETTINGS' ? (
           <div className="col-span-12 flex flex-col gap-8">
@@ -1715,13 +2503,13 @@ export default function App() {
               <p className="text-slate-500 mb-10 font-medium tracking-tight">Personalize your tracking options, payment modes, and profile.</p>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
-                {/* Payment Modes */}
+                {/* My Income Source (Renamed from Payment Modes) */}
                 <div className="space-y-6">
                   <div className="flex items-center gap-3 mb-4">
                     <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center text-indigo-600">
                       <CreditCard size={20} />
                     </div>
-                    <h3 className="font-black text-slate-800 uppercase tracking-widest text-xs">Payment Modes</h3>
+                    <h3 className="font-black text-slate-800 uppercase tracking-widest text-xs">My Income Source</h3>
                   </div>
                   
                   <div className="space-y-2">
@@ -1730,7 +2518,7 @@ export default function App() {
                         <span className="text-sm font-bold text-slate-700">{mode}</span>
                         <button 
                           onClick={() => setModeOptions(prev => prev.filter(m => m !== mode))}
-                          className="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-rose-500 transition-all"
+                          className="p-1 text-slate-300 hover:text-rose-500 transition-all"
                         >
                           <X size={16} />
                         </button>
@@ -1776,7 +2564,7 @@ export default function App() {
                         <span className="text-sm font-bold text-slate-700">{person}</span>
                         <button 
                           onClick={() => setWhomOptions(prev => prev.filter(p => p !== person))}
-                          className="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-rose-500 transition-all"
+                          className="p-1 text-slate-300 hover:text-rose-500 transition-all"
                         >
                           <X size={16} />
                         </button>
@@ -1869,6 +2657,9 @@ export default function App() {
                           if (tenure > 0) {
                             extraData.maturityDate = format(addMonths(parseISO(initDate), tenure), 'yyyy-MM-dd');
                           }
+                          if (type === 'RD') {
+                            extraData.monthlyInstallment = parseFloat(formData.get('monthlyInstallment') as string) || 0;
+                          }
                         }
 
                         if (name) {
@@ -1907,6 +2698,13 @@ export default function App() {
                             <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest ml-1">Limit (₹)</label>
                             <input name="creditLimit" type="number" step="0.01" placeholder="Total Limit" className="w-full px-3 py-2 bg-white border border-indigo-100 rounded-xl text-xs font-bold outline-none" />
                           </div>
+                        </div>
+                      )}
+
+                      {settingsSourceType === 'RD' && (
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest ml-1">Monthly Installment (₹)</label>
+                          <input required name="monthlyInstallment" type="number" step="0.01" placeholder="Ex. 5000" className="w-full px-3 py-2 bg-white border border-indigo-100 rounded-xl text-xs font-bold outline-none" />
                         </div>
                       )}
 
@@ -1960,7 +2758,7 @@ export default function App() {
                           </p>
                         </div>
                         <div className="mt-2 px-4 py-1.5 bg-white border border-slate-200 rounded-lg text-[10px] font-black uppercase tracking-widest text-slate-500 group-hover:bg-indigo-600 group-hover:text-white group-hover:border-indigo-600 transition-all">
-                          Export CSV
+                          Export XLSX
                         </div>
                       </button>
                     ))}
@@ -2044,6 +2842,8 @@ export default function App() {
               setDateRange={setDateRange}
               reportStats={reportStats}
               totalRequiredAmount={totalRequiredAmount}
+              budgets={budgets}
+              currentMonthCategorySpending={currentMonthCategorySpending}
               onEditTransaction={(item) => {
                 setEditingTransaction(item);
                 setIsAddingTransaction(true);
@@ -2053,110 +2853,23 @@ export default function App() {
               onAddTransaction={() => {
                 setIsAddingTransaction(true);
                 setEditingTransaction(null);
-                setSmartAddResult(null); // Clear any previous smart add result
                 setSelectedCategory(DEFAULT_CATEGORIES[0].name);
                 setSelectedMode(modeOptions[0] || 'Other');
               }}
-              onSmartAdd={() => setIsSmartAdding(true)}
-              onExportCSV={() => downloadReport(dateRange.start, dateRange.end, 'Transactions Export')}
+              onRecordSalary={handleRecordSalary}
+              onExportExcel={() => downloadReport(dateRange.start, dateRange.end, 'Transactions Export')}
             />
           </div>
         ) : null}
       </main>
 
-      {/* Smart Add Modal */}
-      <AnimatePresence>
-        {isSmartAdding && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm no-print">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-lg bg-white rounded-[2.5rem] p-8 shadow-2xl border border-white/20 overflow-hidden"
-            >
-              <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-full -mr-16 -mt-16 opacity-50" />
-              
-              <div className="relative">
-                <div className="flex justify-between items-start mb-6">
-                  <div>
-                    <h2 className="text-xl font-black text-slate-800 tracking-tight">Smart Add</h2>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Paste Bank SMS or Alert</p>
-                  </div>
-                  <button onClick={() => { setIsSmartAdding(false); setSmartAddInput(''); }} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
-                    <X size={20} className="text-slate-400" />
-                  </button>
-                </div>
-
-                <div className="space-y-6">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">SMS Text</label>
-                    <textarea 
-                      value={smartAddInput}
-                      onChange={(e) => setSmartAddInput(e.target.value)}
-                      placeholder="Paste your bank message here (e.g., 'Debited by Rs. 500 for Swiggy...')"
-                      className="w-full h-32 px-5 py-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none text-sm font-semibold focus:ring-4 focus:ring-indigo-100 transition-all resize-none"
-                    />
-                  </div>
-
-                  <div className="flex gap-3">
-                    <button 
-                      onClick={() => { setIsSmartAdding(false); setSmartAddInput(''); }}
-                      className="flex-1 py-4 bg-slate-100 text-slate-500 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all"
-                    >
-                      Cancel
-                    </button>
-                    <button 
-                      disabled={!smartAddInput.trim() || isParsingSmartAdd}
-                      onClick={async () => {
-                        setIsParsingSmartAdd(true);
-                        try {
-                          const result = await parseTransactionSms(smartAddInput);
-                          if (result) {
-                            setSmartAddResult(result);
-                            setIsAddingTransaction(true);
-                            setEditingTransaction(null);
-                            setSelectedCategory(result.category || DEFAULT_CATEGORIES[0].name);
-                            setSelectedMode(result.mode || modeOptions[0] || 'Add New...');
-                            setSelectedWhom(result.whom || whomOptions[0] || 'Add New...');
-                            setIsSmartAdding(false);
-                            setSmartAddInput('');
-                          } else {
-                            alert("Could not parse transaction. Please try a different message or add manually.");
-                          }
-                        } catch (err) {
-                          alert("Error parsing message. Please try again.");
-                        } finally {
-                          setIsParsingSmartAdd(false);
-                        }
-                      }}
-                      className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 disabled:opacity-50 flex items-center justify-center gap-2"
-                    >
-                      {isParsingSmartAdd ? (
-                        <>
-                          <RefreshCw size={14} className="animate-spin" />
-                          Analyzing...
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles size={14} />
-                          Analyze & Add
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* Add/Edit Transaction Modal */}
       <AnimatePresence>
         {isAddingTransaction && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/40 backdrop-blur-sm overflow-y-auto">
             <motion.div 
-              key={editingTransaction?.id || (smartAddResult ? 'smart' : 'new')}
+              key={editingTransaction?.id || 'new'}
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
@@ -2186,18 +2899,34 @@ export default function App() {
                   const formData = new FormData(e.currentTarget);
                   const cat = formData.get('category') as string;
                   const mod = formData.get('mode') as string;
+                  const type = formData.get('type') as TransactionType;
                   
+                  // Logic for specific categories
+                  let category = (cat === 'Other Expense' || cat === 'Other EMI') ? (formData.get('customCategory') as string || formData.get('details') as string || cat) : cat;
+                  let title = formData.get('title') as string;
+                  let date = formData.get('date') as string;
+                  const details = formData.get('details') as string || '';
+                  const whom = selectedWhom === 'Add New...' ? (formData.get('customWhom') as string || selectedWhom) : selectedWhom;
+                  const mode = selectedMode === 'Add New...' ? (formData.get('customMode') as string || selectedMode) : selectedMode;
+                  const source = selectedSource === 'Add New...' ? (formData.get('customSource') as string || selectedSource) : selectedSource;
+
+                  if (category === 'Salary') {
+                    title = 'Salary';
+                    const now = new Date();
+                    date = getLastWorkingDayOfMonth(now.getFullYear(), now.getMonth());
+                  }
+
                   const transactionData = {
-                    title: formData.get('title') as string,
+                    title,
                     amount: parseFloat(formData.get('amount') as string),
-                    type: formData.get('type') as any,
-                    category: cat === 'Other Expense' ? (formData.get('customCategory') as string || cat) : cat,
-                    whom: selectedWhom === 'Add New...' ? (formData.get('customWhom') as string || selectedWhom) : selectedWhom,
-                    mode: selectedMode === 'Add New...' ? (formData.get('customMode') as string || selectedMode) : selectedMode,
-                    source: selectedSource === 'Add New...' ? (formData.get('customSource') as string || selectedSource) : selectedSource,
-                    date: formData.get('date') as string,
-                    isRecurring: formData.get('isRecurring') === 'on',
-                    recurringEndDate: formData.get('recurringEndDate') as string || undefined,
+                    type,
+                    category,
+                    whom,
+                    mode,
+                    source,
+                    date,
+                    isRecurring: false,
+                    details
                   };
 
                   if (editingTransaction) {
@@ -2218,7 +2947,12 @@ export default function App() {
                           type="radio" 
                           name="type" 
                           value={opt.val} 
-                          defaultChecked={editingTransaction ? editingTransaction.type === opt.val : (smartAddResult ? smartAddResult.type === opt.val : opt.val === 'EXPENSE')} 
+                          checked={selectedType === opt.val}
+                          onChange={() => {
+                            setSelectedType(opt.val as any);
+                            const firstMatch = DEFAULT_CATEGORIES.find(c => c.type === opt.val);
+                            if (firstMatch) setSelectedCategory(firstMatch.name);
+                          }}
                           className="sr-only peer" 
                         />
                         <div className={cn(
@@ -2231,46 +2965,33 @@ export default function App() {
                     ))}
                   </div>
 
-                  <div className="flex flex-col gap-3 px-1">
-                    <label className="relative inline-flex items-center cursor-pointer">
+                  <div className="space-y-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Description</label>
                       <input 
-                        type="checkbox" 
-                        name="isRecurring" 
-                        checked={isRecurringChecked}
-                        onChange={(e) => setIsRecurringChecked(e.target.checked)}
-                        className="sr-only peer" 
+                        required
+                        name="title"
+                        type="text" 
+                        value={formTitle}
+                        onChange={(e) => setFormTitle(e.target.value)}
+                        placeholder="Ex. Starbucks Coffee"
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-4 focus:ring-indigo-100 outline-none transition-all font-semibold text-sm"
                       />
-                      <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
-                      <span className="ms-3 text-xs font-bold text-slate-500">Recurring Monthly?</span>
-                    </label>
+                    </div>
 
-                    {isRecurringChecked && (
-                      <motion.div 
-                        initial={{ opacity: 0, y: -10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="space-y-1"
-                      >
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">End Date (Optional)</label>
-                        <input 
-                          name="recurringEndDate"
-                          type="date" 
-                          defaultValue={editingTransaction?.recurringEndDate}
-                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:ring-4 focus:ring-indigo-50 focus:border-indigo-500 outline-none transition-all"
+                    {selectedCategory === 'Other EMI' && (
+                      <div className="space-y-1">
+                         <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">EMI Details</label>
+                         <input 
+                          required
+                          name="details"
+                          type="text" 
+                          defaultValue={editingTransaction?.details || ''}
+                          placeholder="Ex. Laptop Loan"
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-4 focus:ring-indigo-100 outline-none transition-all font-semibold text-sm"
                         />
-                      </motion.div>
+                      </div>
                     )}
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Description</label>
-                    <input 
-                      required
-                      name="title"
-                      type="text" 
-                      defaultValue={editingTransaction?.title || smartAddResult?.title || ''}
-                      placeholder="Ex. Starbucks Coffee"
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-4 focus:ring-indigo-100 outline-none transition-all font-semibold text-sm"
-                    />
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -2281,7 +3002,7 @@ export default function App() {
                         name="amount"
                         type="number" 
                         step="0.01"
-                        defaultValue={editingTransaction?.amount || smartAddResult?.amount || ''}
+                        defaultValue={editingTransaction?.amount || ''}
                         placeholder="0.00"
                         className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-4 focus:ring-indigo-100 outline-none transition-all font-semibold text-sm"
                       />
@@ -2292,7 +3013,8 @@ export default function App() {
                         required
                         name="date"
                         type="date" 
-                        defaultValue={editingTransaction?.date || smartAddResult?.date || format(new Date(), 'yyyy-MM-dd')}
+                        value={formDate}
+                        onChange={(e) => setFormDate(e.target.value)}
                         className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-4 focus:ring-indigo-100 outline-none transition-all font-semibold text-sm"
                       />
                     </div>
@@ -2306,13 +3028,17 @@ export default function App() {
                       onChange={(e) => setSelectedCategory(e.target.value)}
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-4 focus:ring-indigo-100 outline-none transition-all font-semibold appearance-none text-sm"
                     >
-                      {categories.map(group => (
-                        <optgroup key={group.mainCategory} label={group.mainCategory}>
-                          {group.subCategories.map(c => (
-                            <option key={c.name} value={c.name}>{c.icon} {c.name}</option>
-                          ))}
-                        </optgroup>
-                      ))}
+                      {categories.map(group => {
+                        const filteredSubs = group.subCategories.filter(c => c.type === selectedType);
+                        if (filteredSubs.length === 0) return null;
+                        return (
+                          <optgroup key={group.mainCategory} label={group.mainCategory}>
+                            {filteredSubs.map(c => (
+                              <option key={c.name} value={c.name}>{c.icon} {c.name}</option>
+                            ))}
+                          </optgroup>
+                        );
+                      })}
                     </select>
                   </div>
 
@@ -2336,18 +3062,6 @@ export default function App() {
 
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">For Whom</label>
-                      <select 
-                        name="whom"
-                        value={selectedWhom}
-                        onChange={(e) => setSelectedWhom(e.target.value)}
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-4 focus:ring-indigo-100 outline-none transition-all font-semibold appearance-none text-sm"
-                      >
-                        {whomOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                        <option value="Add New...">+ Add New...</option>
-                      </select>
-                    </div>
-                    <div className="space-y-1">
                       <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Payment Mode</label>
                       <select 
                         name="mode"
@@ -2355,14 +3069,26 @@ export default function App() {
                         onChange={(e) => setSelectedMode(e.target.value)}
                         className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-4 focus:ring-indigo-100 outline-none transition-all font-semibold appearance-none text-sm"
                       >
-                        {modeOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                        {modeOptions.map(m => <option key={m} value={m}>{m}</option>)}
+                        <option value="Add New...">+ Add New...</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">To / Whom</label>
+                      <select 
+                        name="whom"
+                        value={selectedWhom}
+                        onChange={(e) => setSelectedWhom(e.target.value)}
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-4 focus:ring-indigo-100 outline-none transition-all font-semibold appearance-none text-sm"
+                      >
+                         {whomOptions.map(p => <option key={p} value={p}>{p}</option>)}
                         <option value="Add New...">+ Add New...</option>
                       </select>
                     </div>
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Source (Bank/Card)</label>
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Source Account</label>
                     <select 
                       name="source"
                       value={selectedSource}
@@ -2440,9 +3166,9 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Add Asset Modal */}
+      {/* Add/Edit Asset Modal */}
       <AnimatePresence>
-        {isAddingAsset && (
+        {(isAddingAsset || editingAsset) && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/40 backdrop-blur-sm">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }}
@@ -2452,9 +3178,9 @@ export default function App() {
             >
               <div className="p-8">
                 <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-2xl font-black text-slate-800">Add Asset</h2>
+                  <h2 className="text-2xl font-black text-slate-800">{editingAsset ? 'Edit Asset' : 'Add Asset'}</h2>
                   <button 
-                    onClick={() => {setIsAddingAsset(false); setFormUnitPrice(''); setFormQuantity(''); setFormInvestedAmount('');}}
+                    onClick={() => {setIsAddingAsset(false); setEditingAsset(null); setFormUnitPrice(''); setFormQuantity(''); setFormInvestedAmount('');}}
                     className="p-2 hover:bg-slate-100 rounded-full transition-colors"
                   >
                     <X size={24} className="text-slate-400" />
@@ -2468,59 +3194,87 @@ export default function App() {
                   const unitPrice = formData.get('unitPrice') ? parseFloat(formData.get('unitPrice') as string) : undefined;
                   const quantity = formData.get('quantity') ? parseFloat(formData.get('quantity') as string) : (unitPrice && unitPrice > 0 ? investedAmount / unitPrice : undefined);
                   
-                  addAsset({
+                  const assetData: Omit<Asset, 'id' | 'lastUpdated'> = {
                     name: formData.get('name') as string,
                     type: formData.get('type') as AssetType,
                     investedAmount,
+                    currentValue: investedAmount,
                     unitPrice,
                     quantity,
                     platform: formData.get('platform') as string,
+                    source: selectedAssetSource,
                     details: selectedAssetType === 'OTHER' ? formData.get('details') as string : undefined,
                     insuranceType: formData.get('insuranceType') as InsuranceType || undefined,
-                    insuranceCompany: formData.get('insuranceCompany') as string || undefined,
+                    insuranceCompany: selectedInsuranceCompany === 'Add New...' ? (formData.get('customInsurance') as string || selectedInsuranceCompany) : selectedInsuranceCompany,
                     sumAssured: formData.get('sumAssured') ? parseFloat(formData.get('sumAssured') as string) : undefined,
                     dateOfIssue: formData.get('dateOfIssue') as string || undefined,
                     paymentDuration: formData.get('paymentDuration') ? parseInt(formData.get('paymentDuration') as string) : undefined,
                     yearsPaid: formData.get('yearsPaid') ? parseInt(formData.get('yearsPaid') as string) : undefined,
-                    startDate: formData.get('startDate') as string || undefined,
-                    endDate: formData.get('endDate') as string || undefined,
-                    tenureMonths: formData.get('tenureMonths') ? parseInt(formData.get('tenureMonths') as string) : undefined,
-                    maturityAmount: formData.get('maturityAmount') ? parseFloat(formData.get('maturityAmount') as string) : undefined,
+                    startDate: assetStartDate || undefined,
+                    endDate: assetEndDate || undefined,
+                    tenureMonths: assetTenureMonths ? parseInt(assetTenureMonths) : undefined,
+                    roi: assetROI ? parseFloat(assetROI) : undefined,
+                    maturityAmount: formMaturityAmount ? parseFloat(formMaturityAmount) : (formData.get('maturityAmount') ? parseFloat(formData.get('maturityAmount') as string) : undefined),
                     premiumFrequency: formData.get('premiumFrequency') as any || undefined,
-                  });
+                    policyNumber: formData.get('policyNumber') as string || undefined,
+                    renewalDate: formData.get('renewalDate') as string || undefined,
+                    notes: formData.get('notes') as string || undefined,
+                  };
+
+                  if (editingAsset) {
+                    updateAsset({ ...assetData, id: editingAsset.id, lastUpdated: new Date().toISOString(), topups: editingAsset.topups });
+                  } else {
+                    addAsset(assetData);
+                  }
+
                   setIsAddingAsset(false);
+                  setEditingAsset(null);
                   setFormUnitPrice('');
                   setFormQuantity('');
                   setFormInvestedAmount('');
                 }} className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Asset Type*</label>
+                    <select 
+                      required
+                      name="type" 
+                      value={selectedAssetType}
+                      onChange={(e) => {
+                        setSelectedAssetType(e.target.value as AssetType);
+                        setFormUnitPrice('');
+                        setFormQuantity('');
+                      }}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-sm focus:border-indigo-300 transition-colors"
+                    >
+                      <option value="MUTUAL_FUND">Mutual Fund</option>
+                      <option value="STOCK">Stock</option>
+                      <option value="GOLD">Gold</option>
+                      <option value="SILVER">Silver</option>
+                      <option value="ULIPS">ULIPS</option>
+                      <option value="FD">Fixed Deposit (FD)</option>
+                      <option value="RD">Recurring Deposit (RD)</option>
+                      <option value="INSURANCE">Insurance</option>
+                      <option value="OTHER">Other</option>
+                    </select>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Asset Type*</label>
-                      <select 
-                        required
-                        name="type" 
-                        value={selectedAssetType}
-                        onChange={(e) => {
-                          setSelectedAssetType(e.target.value as AssetType);
-                          setFormUnitPrice('');
-                          setFormQuantity('');
-                        }}
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-sm focus:border-indigo-300 transition-colors"
-                      >
-                        <option value="MUTUAL_FUND">Mutual Fund</option>
-                        <option value="STOCK">Stock</option>
-                        <option value="GOLD">Gold</option>
-                        <option value="SILVER">Silver</option>
-                        <option value="ULIPS">ULIPS</option>
-                        <option value="FD">Fixed Deposit (FD)</option>
-                        <option value="RD">Recurring Deposit (RD)</option>
-                        <option value="INSURANCE">Insurance</option>
-                        <option value="OTHER">Other</option>
-                      </select>
-                    </div>
                     <div className="space-y-1">
                       <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Asset Name*</label>
                       <input required name="name" type="text" placeholder={selectedAssetType === 'STOCK' ? "Ex. Reliance Industries" : "Ex. Nifty 50 Index Fund"} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-sm focus:border-indigo-300 transition-colors" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Source Account*</label>
+                      <select 
+                        required 
+                        name="source" 
+                        value={selectedAssetSource}
+                        onChange={(e) => setSelectedAssetSource(e.target.value)}
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-sm focus:border-indigo-300 transition-colors"
+                      >
+                        <option value="" disabled>Select Source Account*</option>
+                        {sources.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                      </select>
                     </div>
                   </div>
 
@@ -2530,7 +3284,9 @@ export default function App() {
                       <input required name="platform" type="text" placeholder="Ex. Groww, Zerodha, Bank" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-sm focus:border-indigo-300 transition-colors" />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Total Amount Invested (₹)*</label>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">
+                        {selectedAssetType === 'INSURANCE' ? "Total amount paid as a premium (₹)*" : "Total Amount Invested (₹)*"}
+                      </label>
                       <input 
                         required 
                         name="investedAmount" 
@@ -2538,17 +3294,14 @@ export default function App() {
                         step="0.01" 
                         placeholder="0.00" 
                         value={formInvestedAmount}
-                        onChange={(e) => setFormInvestedAmount(e.target.value)}
-                        readOnly={['STOCK', 'MUTUAL_FUND'].includes(selectedAssetType)}
-                        className={cn(
-                          "w-full px-4 py-3 border rounded-xl outline-none font-semibold text-sm transition-colors",
-                          ['STOCK', 'MUTUAL_FUND'].includes(selectedAssetType) ? "bg-indigo-50 border-indigo-100 text-indigo-700" : "bg-slate-50 border-slate-200 focus:border-indigo-300"
-                        )} 
+                        onChange={(e) => handleInvestedAmountChange(e.target.value)}
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-sm focus:border-indigo-300 transition-colors"
                       />
                     </div>
                   </div>
 
-                  {['STOCK', 'MUTUAL_FUND', 'GOLD', 'SILVER'].includes(selectedAssetType) && (
+
+                  {['STOCK', 'MUTUAL_FUND', 'GOLD', 'SILVER', 'ULIPS'].includes(selectedAssetType) && (
                     <motion.div 
                       initial={{ opacity: 0, y: -5 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -2565,20 +3318,22 @@ export default function App() {
                           step="0.001" 
                           placeholder={['GOLD', 'SILVER'].includes(selectedAssetType) ? "Ex. 10.5" : "Ex. 10"} 
                           value={formQuantity}
-                          onChange={(e) => setFormQuantity(e.target.value)}
+                          onChange={(e) => handleQuantityChange(e.target.value)}
                           className="w-full px-4 py-3 bg-white border border-indigo-100 rounded-xl outline-none font-semibold text-sm focus:border-indigo-300 transition-colors" 
                         />
                       </div>
                       <div className="space-y-1">
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Avg. Unit Price (₹)*</label>
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">
+                          {['GOLD', 'SILVER'].includes(selectedAssetType) ? "Price (per Gram) (₹)*" : "Avg. Unit Price (₹)*"}
+                        </label>
                         <input 
                           required 
                           name="unitPrice" 
                           type="number" 
                           step="0.01" 
-                          placeholder={selectedAssetType === 'STOCK' ? "Ex. 2500" : "Ex. 5000"} 
+                          placeholder={['GOLD', 'SILVER'].includes(selectedAssetType) ? "Ex. 7500" : (selectedAssetType === 'STOCK' || selectedAssetType === 'ULIPS' ? "Ex. 2500" : "Ex. 5000")} 
                           value={formUnitPrice}
-                          onChange={(e) => setFormUnitPrice(e.target.value)}
+                          onChange={(e) => handleUnitPriceChange(e.target.value)}
                           className="w-full px-4 py-3 bg-white border border-indigo-100 rounded-xl outline-none font-semibold text-sm focus:border-indigo-300 transition-colors" 
                         />
                       </div>
@@ -2593,7 +3348,12 @@ export default function App() {
                     >
                       <div className="space-y-1">
                         <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Insurance Type*</label>
-                        <select required name="insuranceType" className="w-full px-4 py-3 bg-white border border-rose-200 rounded-xl outline-none font-semibold text-sm focus:border-rose-300 transition-colors">
+                        <select 
+                          required 
+                          name="insuranceType" 
+                          defaultValue="HEALTH"
+                          className="w-full px-4 py-3 bg-white border border-rose-200 rounded-xl outline-none font-semibold text-sm focus:border-rose-300 transition-colors text-slate-900"
+                        >
                           <option value="HEALTH">Health Insurance</option>
                           <option value="TERM">Term Insurance</option>
                           <option value="BIKE">Bike Insurance</option>
@@ -2605,13 +3365,37 @@ export default function App() {
                       <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-1">
                           <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Company Name*</label>
-                          <input required name="insuranceCompany" type="text" placeholder="Ex. LIC, HDFC Ergo" className="w-full px-4 py-3 bg-white border border-rose-200 rounded-xl outline-none font-semibold text-sm focus:border-rose-300 transition-colors" />
+                          <select 
+                            required 
+                            name="insuranceCompany" 
+                            value={selectedInsuranceCompany}
+                            onChange={(e) => setSelectedInsuranceCompany(e.target.value)}
+                            className="w-full px-4 py-3 bg-white border border-rose-200 rounded-xl outline-none font-semibold text-sm focus:border-rose-300 transition-colors text-slate-900"
+                          >
+                            {insuranceCompanyOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                            <option value="Add New...">+ Add New...</option>
+                          </select>
                         </div>
                         <div className="space-y-1">
                           <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Sum Assured (₹)*</label>
                           <input required name="sumAssured" type="number" step="0.01" placeholder="Ex. 50,00,000" className="w-full px-4 py-3 bg-white border border-rose-200 rounded-xl outline-none font-semibold text-sm focus:border-rose-300 transition-colors" />
                         </div>
                       </div>
+
+                      {selectedInsuranceCompany === 'Add New...' && (
+                        <motion.div initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} className="space-y-1">
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Company Name*</label>
+                          <input 
+                            required 
+                            name="customInsurance" 
+                            type="text" 
+                            value={customInsuranceCompany}
+                            onChange={(e) => setCustomInsuranceCompany(e.target.value)}
+                            placeholder="Ex. LIC, HDFC Ergo" 
+                            className="w-full px-4 py-3 bg-rose-50 border border-rose-100 rounded-xl outline-none font-semibold text-sm focus:border-rose-300 transition-colors" 
+                          />
+                        </motion.div>
+                      )}
 
                       <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-1">
@@ -2634,12 +3418,28 @@ export default function App() {
 
                       <div className="space-y-1">
                         <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Premium Frequency*</label>
-                        <select required name="premiumFrequency" className="w-full px-4 py-3 bg-white border border-rose-200 rounded-xl outline-none font-semibold text-sm focus:border-rose-300 transition-colors">
+                        <select 
+                          required 
+                          name="premiumFrequency" 
+                          defaultValue="YEARLY"
+                          className="w-full px-4 py-3 bg-white border border-rose-200 rounded-xl outline-none font-semibold text-sm focus:border-rose-300 transition-colors text-slate-900"
+                        >
                           <option value="YEARLY">Yearly</option>
                           <option value="HALF_YEARLY">Half-Yearly</option>
                           <option value="QUARTERLY">Quarterly</option>
                           <option value="MONTHLY">Monthly</option>
                         </select>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Policy Number</label>
+                          <input name="policyNumber" type="text" placeholder="Ex. POL12345678" className="w-full px-4 py-3 bg-white border border-rose-200 rounded-xl outline-none font-semibold text-sm focus:border-rose-300 transition-colors" />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Renewal/Expiry Date</label>
+                          <input name="renewalDate" type="date" className="w-full px-4 py-3 bg-white border border-rose-200 rounded-xl outline-none font-semibold text-sm focus:border-rose-300 transition-colors" />
+                        </div>
                       </div>
                     </motion.div>
                   )}
@@ -2652,22 +3452,63 @@ export default function App() {
                     >
                       <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-1">
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Tenure (Mos)</label>
+                          <input 
+                            name="tenureMonths" 
+                            type="number" 
+                            placeholder="Ex. 12" 
+                            value={assetTenureMonths}
+                            onChange={(e) => setAssetTenureMonths(e.target.value)}
+                            className="w-full px-2 py-3 bg-white border border-amber-200 rounded-xl outline-none font-semibold text-xs focus:border-amber-300 transition-colors" 
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Interest Rate (% ROI)</label>
+                          <input 
+                            name="roi" 
+                            type="number" 
+                            step="0.01"
+                            placeholder="Ex. 7.1" 
+                            value={assetROI}
+                            onChange={(e) => setAssetROI(e.target.value)}
+                            className="w-full px-2 py-3 bg-white border border-amber-200 rounded-xl outline-none font-semibold text-xs focus:border-amber-300 transition-colors" 
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="space-y-1">
                           <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Start Date*</label>
-                          <input required name="startDate" type="date" className="w-full px-4 py-3 bg-white border border-amber-200 rounded-xl outline-none font-semibold text-sm focus:border-amber-300 transition-colors" />
+                          <input 
+                            required 
+                            name="startDate" 
+                            type="date" 
+                            value={assetStartDate}
+                            onChange={(e) => setAssetStartDate(e.target.value)}
+                            className="w-full px-2 py-3 bg-white border border-amber-200 rounded-xl outline-none font-semibold text-xs focus:border-amber-300 transition-colors" 
+                          />
                         </div>
                         <div className="space-y-1">
                           <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Maturity Date*</label>
-                          <input required name="endDate" type="date" className="w-full px-4 py-3 bg-white border border-amber-200 rounded-xl outline-none font-semibold text-sm focus:border-amber-300 transition-colors" />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Tenure (Months)</label>
-                          <input name="tenureMonths" type="number" placeholder="Ex. 12" className="w-full px-4 py-3 bg-white border border-amber-200 rounded-xl outline-none font-semibold text-sm focus:border-amber-300 transition-colors" />
+                          <input 
+                            required 
+                            name="endDate" 
+                            type="date" 
+                            value={assetEndDate}
+                            onChange={(e) => setAssetEndDate(e.target.value)}
+                            className="w-full px-2 py-3 bg-white border border-amber-200 rounded-xl outline-none font-semibold text-xs focus:border-amber-300 transition-colors" 
+                          />
                         </div>
                         <div className="space-y-1">
                           <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Maturity Amount (₹)</label>
-                          <input name="maturityAmount" type="number" step="0.01" placeholder="Ex. 1,05,000" className="w-full px-4 py-3 bg-white border border-amber-200 rounded-xl outline-none font-semibold text-sm focus:border-amber-300 transition-colors" />
+                          <input 
+                            name="maturityAmount" 
+                            type="number" 
+                            step="0.01" 
+                            placeholder="Amount at end" 
+                            value={formMaturityAmount}
+                            onChange={(e) => setFormMaturityAmount(e.target.value)}
+                            className="w-full px-2 py-3 bg-white border border-amber-200 rounded-xl outline-none font-semibold text-xs focus:border-amber-300 transition-colors" 
+                          />
                         </div>
                       </div>
                     </motion.div>
@@ -2697,11 +3538,99 @@ export default function App() {
                     </motion.div>
                   )}
 
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Notes / Policy Ref (Optional)</label>
+                    <textarea 
+                      name="notes" 
+                      rows={2}
+                      placeholder="Ex. Stored in blue folder, Policy Ref: 123-ABC" 
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-sm focus:border-indigo-300 transition-colors resize-none"
+                    />
+                  </div>
+
                   <button 
                     type="submit"
                     className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all mt-4"
                   >
-                    Save Asset
+                    {editingAsset ? 'Update Asset' : 'Save Asset'}
+                  </button>
+                </form>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Top-up Modal */}
+      <AnimatePresence>
+        {isToppingUpAsset && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/40 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-[2rem] w-full max-w-md shadow-2xl overflow-hidden"
+            >
+              <div className="p-8">
+                <div className="flex justify-between items-center mb-6">
+                  <div>
+                    <h2 className="text-2xl font-black text-slate-800">Top-up Asset</h2>
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">{isToppingUpAsset.name}</p>
+                  </div>
+                  <button 
+                    onClick={() => setIsToppingUpAsset(null)}
+                    className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                  >
+                    <X size={24} className="text-slate-400" />
+                  </button>
+                </div>
+
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  if (topupAmount) {
+                    addTopUp(isToppingUpAsset.id, parseFloat(topupAmount), topupDate);
+                  }
+                }} className="space-y-6">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Top-up Amount (₹)*</label>
+                    <input 
+                      required 
+                      type="number" 
+                      value={topupAmount}
+                      onChange={(e) => setTopupAmount(e.target.value)}
+                      placeholder="0.00" 
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-lg focus:border-indigo-300 transition-colors"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">Top-up Date*</label>
+                    <input 
+                      required 
+                      type="date" 
+                      value={topupDate}
+                      onChange={(e) => setTopupDate(e.target.value)}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-sm focus:border-indigo-300 transition-colors"
+                    />
+                  </div>
+
+                  <div className="bg-amber-50 p-4 rounded-xl border border-amber-100">
+                    <div className="flex gap-3">
+                      <AlertCircle size={18} className="text-amber-600 shrink-0" />
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-black text-amber-800 uppercase tracking-wider">Calculation Note</p>
+                        <p className="text-[10px] font-medium text-amber-700 leading-relaxed">
+                          The extra interest will be calculated from the top-up date until the maturity date ({isToppingUpAsset.endDate}) at the current ROI ({isToppingUpAsset.roi}%).
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button 
+                    type="submit"
+                    className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all"
+                  >
+                    Confirm Top-up
                   </button>
                 </form>
               </div>
@@ -2797,94 +3726,6 @@ export default function App() {
                     Create Goal
                   </button>
                 </form>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {showAiPanel && (
-          <div className="fixed inset-0 z-[100] flex justify-end no-print">
-            <motion.div 
-              initial={{ opacity: 0 }} 
-              animate={{ opacity: 1 }} 
-              exit={{ opacity: 0 }}
-              onClick={() => setShowAiPanel(false)}
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
-            />
-            <motion.div 
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="relative w-full max-w-lg bg-white dark:bg-slate-900 h-full shadow-2xl flex flex-col"
-            >
-              <div className="p-8 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-indigo-600 dark:bg-indigo-900">
-                <div className="flex items-center gap-4 text-white">
-                  <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
-                    <Sparkles size={28} />
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-black">Executive Summary</h2>
-                    <p className="text-[10px] uppercase tracking-widest font-bold opacity-70">AI Financial Advisory</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setShowAiPanel(false)}
-                  className="p-2 hover:bg-white/10 rounded-full text-white transition-colors"
-                >
-                  <X size={24} />
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50 dark:bg-slate-900/50">
-                {aiAdvice ? (
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="prose prose-slate dark:prose-invert max-w-none"
-                  >
-                    <div className="bg-white dark:bg-slate-800 p-8 rounded-[2.5rem] border border-slate-100 dark:border-slate-700 shadow-sm markdown-body">
-                      <Markdown>{aiAdvice}</Markdown>
-                    </div>
-                  </motion.div>
-                ) : (
-                  <div className="flex flex-col items-center justify-center h-full text-center space-y-4">
-                    <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-2xl flex items-center justify-center animate-pulse">
-                      <Sparkles size={32} />
-                    </div>
-                    <p className="font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest text-[10px]">Generating Executive Summary...</p>
-                  </div>
-                )}
-
-                <div className="mt-8 space-y-4">
-                  <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Quick Tips</h4>
-                  <div className="grid grid-cols-1 gap-3">
-                    <div className="p-4 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/30 rounded-2xl">
-                      <div className="flex gap-3">
-                        <TrendingUp size={16} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
-                        <p className="text-xs font-bold text-emerald-800 dark:text-emerald-200">Try saving 20% of your income this month for better long-term growth.</p>
-                      </div>
-                    </div>
-                    <div className="p-4 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-900/30 rounded-2xl">
-                      <div className="flex gap-3">
-                        <MessageSquareQuote size={16} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
-                        <p className="text-xs font-bold text-indigo-800 dark:text-indigo-200">Analyze your subscription costs. Even small ₹500 saves add up!</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-6 border-t border-slate-100 dark:border-slate-800">
-                <button 
-                  onClick={generateAdvice}
-                  disabled={isGeneratingAdvice}
-                  className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100 dark:shadow-none hover:bg-indigo-700 transition-all flex items-center justify-center gap-2"
-                >
-                  {isGeneratingAdvice ? <RefreshCw size={18} className="animate-spin" /> : <RefreshCw size={18} />}
-                  Refresh AI Insights
-                </button>
               </div>
             </motion.div>
           </div>

@@ -1,5 +1,5 @@
 export type TransactionType = 'INCOME' | 'EXPENSE' | 'EMI' | 'INVESTMENT';
-export type AssetType = 'MUTUAL_FUND' | 'STOCK' | 'FD' | 'RD' | 'INSURANCE' | 'GOLD' | 'SILVER' | 'ULIPS' | 'OTHER';
+export type AssetType = 'MUTUAL_FUND' | 'STOCK' | 'FD' | 'RD' | 'INSURANCE' | 'GOLD' | 'SILVER' | 'ULIPS' | 'VEHICLE' | 'REAL_ESTATE' | 'OTHER';
 export type InsuranceType = 'HEALTH' | 'TERM' | 'BIKE' | 'CAR' | 'OTHER';
 
 export interface Asset {
@@ -18,6 +18,8 @@ export interface Asset {
   endDate?: string;
   maturityAmount?: number;
   tenureMonths?: number;
+  roi?: number;
+  topups?: { amount: number; date: string }[];
   // Insurance specific fields
   insuranceType?: InsuranceType;
   insuranceCompany?: string;
@@ -26,6 +28,19 @@ export interface Asset {
   paymentDuration?: number; // How many years need to pay
   yearsPaid?: number; // How many years paid
   premiumFrequency?: 'MONTHLY' | 'QUARTERLY' | 'HALF_YEARLY' | 'YEARLY';
+  policyNumber?: string;
+  renewalDate?: string;
+  notes?: string;
+  source?: string;
+}
+
+export interface Reminder {
+  id: string;
+  title: string;
+  date: string;
+  type: 'INSURANCE_PREMIUM' | 'FD_MATURITY' | 'RD_INSTALLMENT' | 'BILL' | 'REGISTRATION';
+  relatedId?: string;
+  isCompleted: boolean;
 }
 
 export interface Goal {
@@ -41,7 +56,7 @@ export interface Goal {
 export interface Deduction {
   id: string;
   name: string;
-  category: '80C' | '80D' | '80CCD_1B' | '80E' | '80G' | '80TTA' | '80TTB' | 'HRA' | 'SECTION_24' | 'OTHER';
+  category: '80C' | '80D' | '80CCD_1B' | '80CCD_2' | '80E' | '80G' | '80TTA' | '80TTB' | 'HRA' | '80GG' | 'SECTION_24' | 'OTHER';
   amount: number;
 }
 
@@ -96,6 +111,7 @@ export interface Transaction {
   source: string;
   isRecurring?: boolean;
   recurringEndDate?: string;
+  details?: string;
 }
 
 export interface FinanceSource {
@@ -110,10 +126,14 @@ export interface FinanceSource {
   // Credit Card specific
   outstandingAmount?: number;
   creditLimit?: number;
+  // RD specific
+  monthlyInstallment?: number;
 }
 
 export interface UserProfile {
   name: string;
   initialBalance: number; // Overall legacy balance - might deprecate or use as aggregate
   onboarded: boolean;
+  employmentType?: 'SALARIED' | 'BUSINESS';
+  salaryBankName?: string;
 }

@@ -37,17 +37,23 @@ export const calculateTax = (profile: TaxProfile): { old: TaxCalculationResult; 
   const rules = TAX_RULES['2026-27'];
 
   // New Regime Calculation
-  const newTaxableIncome = Math.max(0, grossIncome - rules.NEW.standardDeduction);
-  const newResult = computeRegimeTax(newTaxableIncome, rules.NEW, 'NEW');
+  const employerNPS = deductions
+    .filter(d => d.category === '80CCD_2')
+    .reduce((sum, d) => sum + Number(d.amount), 0);
+  
+  const newTaxableIncome = Math.max(0, grossIncome - rules.NEW.standardDeduction - employerNPS);
+  const newResult = computeRegimeTax(newTaxableIncome, rules.NEW, 'NEW', grossIncome);
 
   // Old Regime Calculation
   const categoryLimits: Record<string, number> = {
     '80C': 150000,
     '80CCD_1B': 50000,
-    '80D': 75000,
+    '80D': 25000,
+    '80D_PARENTS': 50000,
     '80TTA': 10000,
     '80TTB': 50000,
     'SECTION_24': 200000,
+    '80GG': 60000,
   };
 
   const aggregatedDeductions = deductions.reduce((acc, d) => {
@@ -61,12 +67,12 @@ export const calculateTax = (profile: TaxProfile): { old: TaxCalculationResult; 
   }, 0);
 
   const oldTaxableIncome = Math.max(0, grossIncome - rules.OLD.standardDeduction - totalDeductions);
-  const oldResult = computeRegimeTax(oldTaxableIncome, rules.OLD, 'OLD');
+  const oldResult = computeRegimeTax(oldTaxableIncome, rules.OLD, 'OLD', grossIncome);
 
   return { old: oldResult, newRegime: newResult };
 };
 
-const computeRegimeTax = (income: number, config: any, regime: 'OLD' | 'NEW'): TaxCalculationResult => {
+const computeRegimeTax = (income: number, config: any, regime: 'OLD' | 'NEW', grossIncome: number = 0): TaxCalculationResult => {
   let remaining = income;
   let slabTax = 0;
   const slabBreakdown: { slab: string; rate: string; tax: number }[] = [];
@@ -118,7 +124,7 @@ const computeRegimeTax = (income: number, config: any, regime: 'OLD' | 'NEW'): T
     cess,
     totalTax,
     slabs: slabBreakdown,
-    effectiveRate: income > 0 ? (totalTax / income) * 100 : 0
+    effectiveRate: (grossIncome || income) > 0 ? (totalTax / (grossIncome || income)) * 100 : 0
   };
 };
 

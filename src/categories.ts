@@ -1,15 +1,42 @@
 export const categories = [
   {
+    mainCategory: 'EMI',
+    subCategories: [
+      { name: 'Bike EMI', type: 'EMI', icon: '🏍️' },
+      { name: 'Car EMI', type: 'EMI', icon: '🚘' },
+      { name: 'Appliances EMI', type: 'EMI', icon: '📺' },
+      { name: 'Credit Card EMI', type: 'EMI', icon: '💳' },
+      { name: 'Personal loan EMI', type: 'EMI', icon: '🏦' },
+      { name: 'Other EMI', type: 'EMI', icon: '📝' },
+    ],
+  },
+  {
+    mainCategory: 'Invest',
+    subCategories: [
+      { name: 'FD', type: 'INVESTMENT', icon: '🏦' },
+      { name: 'RD', type: 'INVESTMENT', icon: '📈' },
+      { name: 'Mutual Funds', type: 'INVESTMENT', icon: '📊' },
+      { name: 'Stocks', type: 'INVESTMENT', icon: '💹' },
+      { name: 'Gold', type: 'INVESTMENT', icon: '🪙' },
+      { name: 'Silver', type: 'INVESTMENT', icon: '🥈' },
+      { name: 'LIC Insurance Premiums', type: 'INVESTMENT', icon: '🛡️' },
+      { name: 'Home Loan EMI', type: 'EMI', icon: '🏛️' }, // User asked for Home Loan EMI in Invest option
+      { name: 'Purchase House', type: 'INVESTMENT', icon: '🏠' },
+    ],
+  },
+  {
     mainCategory: 'Essential Expenses',
     subCategories: [
       { name: 'House Rent', type: 'EXPENSE', icon: '🏠' },
-      { name: 'Home Loan EMI', type: 'EMI', icon: '🏛️' },
       { name: 'Electricity Bill', type: 'EXPENSE', icon: '💡' },
       { name: 'Water Bill', type: 'EXPENSE', icon: '🚰' },
       { name: 'Mobile & Broadband', type: 'EXPENSE', icon: '🌐' },
       { name: 'Maid/Cleaning', type: 'EXPENSE', icon: '🧹' },
+      { name: 'Groceries', type: 'EXPENSE', icon: '🛒' },
+      { name: 'Milk & Dairy', type: 'EXPENSE', icon: '🥛' },
+      { name: 'Vegetables & Fruits', type: 'EXPENSE', icon: '🥬' },
+      { name: 'Fuel', type: 'EXPENSE', icon: '⛽' },
       { name: 'Property Tax Yearly once', type: 'EXPENSE', icon: '📜' },
-      { name: 'EMI', type: 'EMI', icon: '💳' },
     ],
   },
   {
@@ -22,39 +49,10 @@ export const categories = [
     ],
   },
   {
-    mainCategory: 'Family & Education',
-    subCategories: [
-      { name: 'Children', type: 'EXPENSE', icon: '👶' },
-      { name: 'School Fees & Education', type: 'EXPENSE', icon: '🎓' },
-      { name: 'Groceries', type: 'EXPENSE', icon: '🛒' },
-      { name: 'Milk & Dairy', type: 'EXPENSE', icon: '🥛' },
-      { name: 'Vegetables & Fruits', type: 'EXPENSE', icon: '🥬' },
-    ],
-  },
-  {
     mainCategory: 'Health & Security',
     subCategories: [
       { name: 'Medicines', type: 'EXPENSE', icon: '💊' },
       { name: 'Hospital savings(Apart from Health Insurance)', type: 'EXPENSE', icon: '🏥' },
-      { name: 'Insurance Premiums', type: 'INVESTMENT', icon: '🛡️' },
-      { name: 'RD (Recurring Deposit)', type: 'INVESTMENT', icon: '📈' },
-    ],
-  },
-  {
-    mainCategory: 'Transport',
-    subCategories: [
-      { name: 'Fuel', type: 'EXPENSE', icon: '⛽' },
-      { name: 'Bike EMI', type: 'EMI', icon: '🏍️' },
-      { name: 'Car EMI', type: 'EMI', icon: '🚘' },
-      { name: 'Public Transport', type: 'EXPENSE', icon: '🚌' },
-    ],
-  },
-  {
-    mainCategory: 'Finance & Saving',
-    subCategories: [
-      { name: 'Personal Loan EMI', type: 'EMI', icon: '🏦' },
-      { name: 'Mutual Funds SIP', type: 'INVESTMENT', icon: '📈' },
-      { name: 'Stocks', type: 'INVESTMENT', icon: '📊' },
     ],
   },
   {

@@ -5,7 +5,7 @@ import {
   filterTransactions, 
   calculateTotalStats, 
   calculateReportStats,
-  generateCSV,
+  generateExcelBlob,
   generateId
 } from './financeUtils';
 import { Transaction, Asset, UserProfile, FinanceSource } from '../types';
@@ -130,11 +130,11 @@ describe('financeUtils', () => {
     });
   });
 
-  describe('generateCSV', () => {
-    it('generates a valid CSV string', () => {
-      const csv = generateCSV(mockTransactions.slice(0, 1));
-      expect(csv).toContain('Date,Title,Amount,Type,Category,Whom,Mode');
-      expect(csv).toContain('2026-05-01,"Salary",5000,INCOME,Salary / Income,Self,SBI UPI');
+  describe('generateExcelBlob', () => {
+    it('generates an excel blob object', () => {
+      const blob = generateExcelBlob(mockTransactions.slice(0, 1), [], []);
+      expect(blob).toBeDefined();
+      expect(blob).toBeInstanceOf(Blob);
     });
   });
 

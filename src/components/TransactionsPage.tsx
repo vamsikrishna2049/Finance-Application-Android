@@ -11,7 +11,7 @@ import {
   Calendar as CalendarIcon,
   Download,
   Plus,
-  Sparkles
+  Briefcase
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -40,10 +40,12 @@ interface TransactionsPageProps {
   setDateRange: (range: { start: string; end: string }) => void;
   reportStats: ReportStats;
   totalRequiredAmount: number;
+  budgets: Record<string, number>;
+  currentMonthCategorySpending: Record<string, number>;
   onEditTransaction: (item: Transaction) => void;
   onAddTransaction: () => void;
-  onSmartAdd: () => void;
-  onExportCSV: () => void;
+  onRecordSalary: () => void;
+  onExportExcel: () => void;
 }
 
 export const TransactionsPage: React.FC<TransactionsPageProps> = ({
@@ -55,10 +57,12 @@ export const TransactionsPage: React.FC<TransactionsPageProps> = ({
   setDateRange,
   reportStats,
   totalRequiredAmount,
+  budgets,
+  currentMonthCategorySpending,
   onEditTransaction,
   onAddTransaction,
-  onSmartAdd,
-  onExportCSV
+  onRecordSalary,
+  onExportExcel
 }) => {
   const topBeneficiaries = getTopBeneficiaries(transactions);
 
@@ -94,18 +98,18 @@ export const TransactionsPage: React.FC<TransactionsPageProps> = ({
              />
           </div>
           <button 
-            onClick={onExportCSV}
+            onClick={onExportExcel}
             className="flex items-center gap-2 px-6 py-3 bg-white text-slate-700 border border-slate-100 rounded-2xl text-xs font-black uppercase tracking-widest shadow-sm hover:bg-slate-50 transition-all"
           >
             <Download size={16} />
-            Export
+            Export XLSX
           </button>
           <button 
-            onClick={onSmartAdd}
-            className="flex items-center gap-2 px-6 py-3 bg-white text-indigo-600 border border-indigo-100 rounded-2xl text-xs font-black uppercase tracking-widest shadow-sm hover:bg-indigo-50 transition-all"
+            onClick={onRecordSalary}
+            className="flex items-center gap-2 px-6 py-3 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-2xl text-xs font-black uppercase tracking-widest shadow-sm hover:bg-emerald-100 transition-all"
           >
-            <Sparkles size={16} />
-            Smart Add
+            <Briefcase size={16} />
+            Record Salary
           </button>
           <button 
             onClick={onAddTransaction}
@@ -177,6 +181,17 @@ export const TransactionsPage: React.FC<TransactionsPageProps> = ({
                                     <span className="text-indigo-400">{item.whom}</span>
                                   </>
                                 )}
+                                {budgets[item.category] > 0 && item.type !== 'INCOME' && (
+                                  <>
+                                    <span className="text-slate-200 ml-1">•</span>
+                                    <span className={cn(
+                                      "ml-1 font-bold",
+                                      (budgets[item.category] - (currentMonthCategorySpending[item.category] || 0)) < 0 ? "text-rose-500" : "text-emerald-500"
+                                    )}>
+                                      Bud. Bal: {formatCurrency(budgets[item.category] - (currentMonthCategorySpending[item.category] || 0))}
+                                    </span>
+                                  </>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -218,7 +233,7 @@ export const TransactionsPage: React.FC<TransactionsPageProps> = ({
 
             <div className="flex flex-col gap-6">
               <div className="h-[250px] w-full relative">
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                   <PieChart>
                     <Pie
                       data={getCategorySpending(filteredTransactions).slice(0, 8)}

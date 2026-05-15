@@ -1,6 +1,6 @@
 {
-  "name": "Finova Finance AI",
+  "name": "Finova",
   "description": "Smart personal finance tracker with AI-powered insights, automated reporting, and a comprehensive Indian Tax Engine with Old vs New regime comparison.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
