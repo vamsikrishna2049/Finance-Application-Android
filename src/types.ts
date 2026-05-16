@@ -7,7 +7,8 @@ export interface Asset {
   name: string;
   type: AssetType;
   investedAmount: number;
-  currentValue?: number; // Kept for logic but removed from UI Add Asset per request
+  currentValue?: number;
+  purchaseYear?: number;
   unitPrice?: number;
   quantity?: number;
   details?: string;
@@ -97,6 +98,29 @@ export interface Budget {
   category: string;
   amount: number;
   period: 'MONTHLY';
+  isVisible?: boolean;
+  order?: number;
+  icon?: string;
+}
+
+export type BillFrequency = 'MONTHLY' | 'QUARTERLY' | 'HALF_YEARLY' | 'YEARLY';
+
+export interface RecurringBill {
+  id: string;
+  name: string;
+  provider?: string;
+  category: string;
+  amount: number;
+  frequency: BillFrequency;
+  monthlyImpact: number;
+  nextDueDate: string;
+  startDate?: string;
+  endDate?: string;
+  isActive: boolean;
+  autoDebit: boolean;
+  remindMe: boolean;
+  sourceAccount?: string;
+  lastUpdated: string;
 }
 
 export interface Transaction {
@@ -117,8 +141,10 @@ export interface Transaction {
 export interface FinanceSource {
   id: string;
   name: string;
-  type: 'BANK' | 'CREDIT_CARD' | 'WALLET' | 'OTHER' | 'FD' | 'RD';
+  type: 'BANK' | 'CREDIT_CARD' | 'WALLET' | 'UPI' | 'CASH' | 'FD' | 'RD' | 'OTHER';
   initialBalance: number;
+  provider?: string; // e.g. HDFC, Google Pay, Amazon Pay
+  isActive?: boolean;
   // FD specific
   tenureMonths?: number;
   initializationDate?: string;
@@ -128,6 +154,36 @@ export interface FinanceSource {
   creditLimit?: number;
   // RD specific
   monthlyInstallment?: number;
+}
+
+export type FinancialEventType = 
+  | 'EXPENSE_RECORDED' 
+  | 'INCOME_ADDED' 
+  | 'RECURRING_BILL_GENERATED' 
+  | 'RECURRING_BILL_UPDATED'
+  | 'RECURRING_BILL_DELETED'
+  | 'BUDGET_ADJUSTED' 
+  | 'CREDIT_CARD_PAYMENT_MADE' 
+  | 'SUBSCRIPTION_RENEWED'
+  | 'ASSET_VALUATION_UPDATED'
+  | 'TRANSFER_MADE'
+  | 'TRANSACTION_UPDATED'
+  | 'TRANSACTION_DELETED'
+  | 'ASSET_CREATED'
+  | 'ASSET_UPDATED'
+  | 'ASSET_TOPPED_UP'
+  | 'GOAL_CREATED'
+  | 'GOAL_CONTRIBUTION_MADE';
+
+export interface FinancialEvent {
+  id: string;
+  type: FinancialEventType;
+  timestamp: string;
+  payload: any;
+  metadata?: {
+    source?: string;
+    isUndone?: boolean;
+  };
 }
 
 export interface UserProfile {

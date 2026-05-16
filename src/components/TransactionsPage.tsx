@@ -28,7 +28,7 @@ import {
   getCategorySpending, 
   getTopBeneficiaries 
 } from '../lib/financeUtils';
-import { Transaction, ReportStats } from '../types';
+import { Transaction, ReportStats, Budget } from '../types';
 import { FLAT_CATEGORIES as DEFAULT_CATEGORIES } from '../categories';
 
 interface TransactionsPageProps {
@@ -40,7 +40,7 @@ interface TransactionsPageProps {
   setDateRange: (range: { start: string; end: string }) => void;
   reportStats: ReportStats;
   totalRequiredAmount: number;
-  budgets: Record<string, number>;
+  budgets: Budget[];
   currentMonthCategorySpending: Record<string, number>;
   onEditTransaction: (item: Transaction) => void;
   onAddTransaction: () => void;
@@ -65,6 +65,12 @@ export const TransactionsPage: React.FC<TransactionsPageProps> = ({
   onExportExcel
 }) => {
   const topBeneficiaries = getTopBeneficiaries(transactions);
+
+  const budgetMap = React.useMemo(() => {
+    const map: Record<string, number> = {};
+    budgets.forEach(b => { map[b.category] = b.amount; });
+    return map;
+  }, [budgets]);
 
   return (
     <div className="col-span-12 flex flex-col gap-8">
@@ -181,14 +187,14 @@ export const TransactionsPage: React.FC<TransactionsPageProps> = ({
                                     <span className="text-indigo-400">{item.whom}</span>
                                   </>
                                 )}
-                                {budgets[item.category] > 0 && item.type !== 'INCOME' && (
+                                {budgetMap[item.category] > 0 && item.type !== 'INCOME' && (
                                   <>
                                     <span className="text-slate-200 ml-1">•</span>
                                     <span className={cn(
                                       "ml-1 font-bold",
-                                      (budgets[item.category] - (currentMonthCategorySpending[item.category] || 0)) < 0 ? "text-rose-500" : "text-emerald-500"
+                                      (budgetMap[item.category] - (currentMonthCategorySpending[item.category] || 0)) < 0 ? "text-rose-500" : "text-emerald-500"
                                     )}>
-                                      Bud. Bal: {formatCurrency(budgets[item.category] - (currentMonthCategorySpending[item.category] || 0))}
+                                      Bud. Bal: {formatCurrency(budgetMap[item.category] - (currentMonthCategorySpending[item.category] || 0))}
                                     </span>
                                   </>
                                 )}

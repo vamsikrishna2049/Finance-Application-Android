@@ -4,10 +4,29 @@ export const categories = [
     subCategories: [
       { name: 'Bike EMI', type: 'EMI', icon: '🏍️' },
       { name: 'Car EMI', type: 'EMI', icon: '🚘' },
+      { name: 'Home Loan EMI', type: 'EMI', icon: '🏛️' },
+      { name: 'Personal Loan EMI', type: 'EMI', icon: '🏦' },
+      { name: 'Education Loan', type: 'EMI', icon: '🎓' },
       { name: 'Appliances EMI', type: 'EMI', icon: '📺' },
       { name: 'Credit Card EMI', type: 'EMI', icon: '💳' },
-      { name: 'Personal loan EMI', type: 'EMI', icon: '🏦' },
       { name: 'Other EMI', type: 'EMI', icon: '📝' },
+    ],
+  },
+  {
+    mainCategory: 'Insurance',
+    subCategories: [
+      { name: 'LIC Insurance Premiums', type: 'INVESTMENT', icon: '🛡️' },
+      { name: 'Health Insurance', type: 'EXPENSE', icon: '🏥' },
+      { name: 'Term Insurance', type: 'EXPENSE', icon: '☂️' },
+      { name: 'Vehicle Insurance', type: 'EXPENSE', icon: '🚗' },
+    ],
+  },
+  {
+    mainCategory: 'Subscriptions',
+    subCategories: [
+      { name: 'Subscriptions', type: 'EXPENSE', icon: '📱' },
+      { name: 'GYM/Club', type: 'EXPENSE', icon: '💪' },
+      { name: 'Mobile/Internet', type: 'EXPENSE', icon: '🌐' },
     ],
   },
   {
@@ -19,8 +38,6 @@ export const categories = [
       { name: 'Stocks', type: 'INVESTMENT', icon: '💹' },
       { name: 'Gold', type: 'INVESTMENT', icon: '🪙' },
       { name: 'Silver', type: 'INVESTMENT', icon: '🥈' },
-      { name: 'LIC Insurance Premiums', type: 'INVESTMENT', icon: '🛡️' },
-      { name: 'Home Loan EMI', type: 'EMI', icon: '🏛️' }, // User asked for Home Loan EMI in Invest option
       { name: 'Purchase House', type: 'INVESTMENT', icon: '🏠' },
     ],
   },
